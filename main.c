@@ -546,10 +546,10 @@ int main(void) {
     RUN_TEST(test_question_quantifier);
     RUN_TEST(test_exact_quantifiers);
 
-    // // Groups and capturing
-    // RUN_TEST(test_basic_groups);
-    // RUN_TEST(test_multiple_groups);
-    // RUN_TEST(test_nested_groups);
+    // Groups and capturing
+    RUN_TEST(test_basic_groups);
+    RUN_TEST(test_multiple_groups);
+    RUN_TEST(test_nested_groups);
 
     // // Alternation
     // RUN_TEST(test_alternation);

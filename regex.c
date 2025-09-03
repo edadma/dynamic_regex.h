@@ -1145,14 +1145,19 @@ void compile_ast_node(ASTNode *node, CompiledRegex *regex) {
                 regex->code[choice_addr].addr = regex->code_len - choice_addr;
                 
             } else if (quantifier == '+') {
-                // One-or-more: [pattern], CHOICE -N
+                // One-or-more: [pattern], CHOICE +2, BRANCH -N
                 int loop_start = regex->code_len;
                 
-                // Compile the target pattern
+                // Compile the target pattern (required first match)
                 compile_ast_node(node->data.quantifier.target, regex);
                 
+                // CHOICE: either continue to next instruction (exit) or jump to pattern again
                 int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                regex->code[choice_pc].addr = loop_start - choice_pc;
+                regex->code[choice_pc].addr = 2; // Skip BRANCH to exit
+                
+                // BRANCH back to pattern for additional matches
+                int branch_pc = emit_ast_instruction(regex, OP_BRANCH);
+                regex->code[branch_pc].addr = loop_start - branch_pc;
                 
             } else if (quantifier == '?') {
                 // Zero-or-one: CHOICE +N, [pattern]
