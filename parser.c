@@ -136,7 +136,15 @@ ASTNode* parse_quantified(Parser *parser) {
     // Check for quantifier
     TokenType type = parser->current_token->type;
     if (type == TOK_STAR || type == TOK_PLUS || type == TOK_QUESTION || type == TOK_QUANTIFIER) {
-        Token *quantifier_token = lexer_next(parser->lexer);
+        // Copy quantifier values immediately before advancing lexer
+        int min_count = 0, max_count = 0;
+        if (type == TOK_QUANTIFIER) {
+            min_count = parser->current_token->data.min_count;
+            max_count = parser->current_token->data.max_count;
+        }
+        
+        // Now advance the lexer
+        lexer_next(parser->lexer);
         parser->current_token = lexer_peek(parser->lexer);
         
         ASTNode *quantifier = create_ast_node(AST_QUANTIFIER);
@@ -160,8 +168,8 @@ ASTNode* parse_quantified(Parser *parser) {
                 break;
             case TOK_QUANTIFIER:
                 quantifier->data.quantifier.quantifier = '{';
-                quantifier->data.quantifier.min_count = quantifier_token->data.min_count;
-                quantifier->data.quantifier.max_count = quantifier_token->data.max_count;
+                quantifier->data.quantifier.min_count = min_count;
+                quantifier->data.quantifier.max_count = max_count;
                 break;
             default:
                 break;
@@ -279,7 +287,7 @@ int parser_is_at_end(Parser *parser) {
 }
 
 // Entry point for parsing a pattern with the new lexer+parser
-static ASTNode* parse_pattern_with_lexer(const char *pattern, int *group_counter) {
+static ASTNode* parse_pattern(const char *pattern, int *group_counter) {
     Lexer *lexer = lexer_new(pattern);
     Parser *parser = parser_new(lexer, group_counter);
     

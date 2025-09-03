@@ -4,8 +4,10 @@
 #include <ctype.h>
 #include <stdio.h>
 
-// Forward declaration for new lexer+parser
-static ASTNode* parse_pattern_with_lexer(const char *pattern, int *group_counter);
+// Forward declaration for AST instruction emission
+int emit_ast_instruction(CompiledRegex *regex, OpCode op);
+// Forward declaration for new lexer+parser (defined in parser.c)
+static ASTNode* parse_pattern(const char *pattern, int *group_counter);
 
 // Use the same compilation logic as v2, just change the execution
 // I'll copy the key parts and focus on the VM execution
@@ -99,8 +101,9 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
     
     // NEW: Use lexer + parser approach with proper precedence
     // Parse pattern to AST using new lexer+parser with proper precedence
+    // DEBUGGING: Switch to new parser to investigate exact quantifier issue
     int group_counter = 0;
-    ASTNode *ast = parse_pattern_with_lexer(pattern, &group_counter);
+    ASTNode *ast = parse_pattern(pattern, &group_counter);
     if (!ast) {
         return NULL; // Parse error
     }
@@ -167,211 +170,7 @@ static int pop_choice(VM *vm) {
     return 1;
 }
 
-static int vm_execute(CompiledRegex *compiled, VM *vm) {
-    int instruction_count = 0;
-    const int max_instructions = 100000;
-    
-    while (vm->pc < compiled->code_len && instruction_count < max_instructions) {
-        instruction_count++;
-        Instruction *inst = &compiled->code[vm->pc];
-        
-        switch (inst->op) {
-            case OP_CHAR:
-                if (vm->pos >= vm->text_len) {
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                    continue;
-                }
-                
-                char text_char = vm->text[vm->pos];
-                char pattern_char = inst->c;
-                
-                // Check for match (case sensitive or insensitive)
-                int char_matches = 0;
-                if (vm->flags & 2) { // Case insensitive flag 'i'
-                    char_matches = (tolower(text_char) == tolower(pattern_char));
-                } else {
-                    char_matches = (text_char == pattern_char);
-                }
-                
-                if (!char_matches) {
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                    continue;
-                }
-                
-                vm->pos++;
-                vm->pc++;
-                vm->last_match_was_zero_length = 0;
-                vm->last_operation_success = 1;
-                break;
-                
-            case OP_DOT:
-                if (vm->pos >= vm->text_len) {
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                    continue;
-                }
-                // Check if we should match newlines (dotall flag)
-                char ch = vm->text[vm->pos];
-                if (ch == '\n' && !(vm->flags & 1)) {  // 's' flag not set
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                    continue;
-                }
-                vm->pos++;
-                vm->pc++;
-                vm->last_match_was_zero_length = 0;
-                vm->last_operation_success = 1;
-                break;
-                
-            case OP_CHARSET:
-                if (vm->pos >= vm->text_len) {
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                    continue;
-                }
-                
-                // Check if character matches the character class
-                char test_ch = vm->text[vm->pos];
-                int matches = 0;
-                
-                // Check direct character match
-                int bit = (unsigned char)test_ch;
-                matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
-                
-                // If case insensitive flag is set and no match yet, try opposite case
-                if (!matches && (vm->flags & 2)) { // Case insensitive flag 'i'
-                    char opposite_case;
-                    if (islower(test_ch)) {
-                        opposite_case = toupper(test_ch);
-                    } else if (isupper(test_ch)) {
-                        opposite_case = tolower(test_ch);
-                    } else {
-                        opposite_case = test_ch; // No case change for non-letters
-                    }
-                    
-                    bit = (unsigned char)opposite_case;
-                    matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
-                }
-                
-                // Apply negation if needed
-                if (inst->negate) {
-                    matches = !matches;
-                }
-                
-                if (matches) {
-                    vm->pos++;
-                    vm->pc++;
-                    vm->last_match_was_zero_length = 0;
-                    vm->last_operation_success = 1;
-                } else {
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                }
-                break;
-                
-            case OP_CHOICE:
-                push_choice(vm, vm->pc + inst->addr);
-                vm->pc++;
-                break;
-                
-            case OP_BRANCH:
-                vm->pc += inst->addr;
-                break;
-                
-            case OP_BRANCH_IF_NOT:
-                // Branch back if the last operation was successful (to continue the loop)
-                if (vm->last_operation_success) {
-                    vm->pc += inst->addr;
-                } else {
-                    vm->pc++;
-                }
-                break;
-                
-            case OP_SAVE_POINTER: {
-                // Push current position to integer data stack
-                IntStack *new_stack = int_stack_push(vm->data_stack, vm->pos);
-                int_stack_release(vm->data_stack);
-                vm->data_stack = new_stack;
-                vm->pc++;
-                break;
-            }
-            
-            case OP_RESTORE_POSITION: {
-                // Pop position from integer data stack
-                int saved_pos;
-                IntStack *new_stack = int_stack_pop(vm->data_stack, &saved_pos);
-                vm->pos = saved_pos;
-                int_stack_release(vm->data_stack);
-                vm->data_stack = new_stack;
-                vm->pc++;
-                break;
-            }
-            
-            case OP_SAVE_GROUP:
-                if (inst->is_end) {
-                    vm->group_ends[inst->group_num] = vm->pos;
-                } else {
-                    vm->group_starts[inst->group_num] = vm->pos;
-                }
-                vm->pc++;
-                break;
-                
-            case OP_ZERO_LENGTH:
-                // For now, just continue (need proper zero-length detection)
-                vm->pc++;
-                break;
-                
-            case OP_ANCHOR_START:
-                // Match start of string, or start of line in multiline mode
-                if (vm->pos == 0) {
-                    // At start of string - always matches
-                    vm->pc++;
-                    vm->last_operation_success = 1;
-                } else if ((vm->flags & 8) && vm->pos > 0 && vm->text[vm->pos - 1] == '\n') {
-                    // Multiline mode and after a newline - matches start of line
-                    vm->pc++;
-                    vm->last_operation_success = 1;
-                } else {
-                    // Doesn't match
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                }
-                break;
-                
-            case OP_ANCHOR_END:
-                // Match end of string, or end of line in multiline mode
-                if (vm->pos == vm->text_len) {
-                    // At end of string - always matches
-                    vm->pc++;
-                    vm->last_operation_success = 1;
-                } else if ((vm->flags & 8) && vm->text[vm->pos] == '\n') {
-                    // Multiline mode and before a newline - matches end of line
-                    vm->pc++;
-                    vm->last_operation_success = 1;
-                } else {
-                    // Doesn't match
-                    vm->last_operation_success = 0;
-                    if (!pop_choice(vm)) return 0;
-                }
-                break;
-                
-            case OP_MATCH:
-                return 1;
-                
-            case OP_FAIL:
-                if (!pop_choice(vm)) return 0;
-                break;
-                
-            default:
-                vm->pc++;
-                break;
-        }
-    }
-    
-    return 0;
-}
+#include "execute.c" // AMALGAMATE
 
 // New function that returns detailed match information
 typedef struct {
@@ -415,7 +214,7 @@ DetailedMatch execute_regex_detailed(CompiledRegex *compiled, const char *text, 
             vm.group_ends[i] = -1;
         }
         
-        int match_result = vm_execute(compiled, &vm);
+        int match_result = execute(compiled, &vm);
         
         if (match_result) {
             // Success - copy group data
@@ -480,7 +279,7 @@ int execute_regex(CompiledRegex *compiled, const char *text, int start_pos) {
             vm.group_ends[i] = -1;
         }
         
-        int result = vm_execute(compiled, &vm);
+        int result = execute(compiled, &vm);
         
         // Cleanup
         int_stack_release(vm.data_stack);
@@ -796,674 +595,153 @@ void add_alternation_child(ASTNode *alternation, ASTNode *child) {
     alternation->data.alternation.alternatives[alternation->data.alternation.alternative_count++] = child;
 }
 
-ASTNode* parse_pattern(const char *pattern, int *group_counter) {
-    int len = strlen(pattern);
-    if (len == 0) {
-        // Empty pattern - create empty sequence
-        return create_ast_node(AST_SEQUENCE);
-    }
-    
-    // First pass: check for top-level alternation (|)
-    // Count parentheses depth to avoid splitting inside groups
-    int paren_depth = 0;
-    int alternation_count = 1; // At least one alternative
-    
-    for (int i = 0; i < len; i++) {
-        char ch = pattern[i];
-        
-        if (ch == '\\' && i + 1 < len) {
-            i++; // Skip escaped character
-        } else if (ch == '(') {
-            paren_depth++;
-        } else if (ch == ')') {
-            paren_depth--;
-        } else if (ch == '|' && paren_depth == 0) {
-            alternation_count++;
-        }
-    }
-    
-    if (alternation_count > 1) {
-        // Pattern contains top-level alternation - split it
-        ASTNode *alternation = create_ast_node(AST_ALTERNATION);
-        
-        int start = 0;
-        paren_depth = 0;
-        
-        for (int i = 0; i <= len; i++) {
-            char ch = (i < len) ? pattern[i] : '\0';
-            
-            if (ch == '\\' && i + 1 < len) {
-                i++; // Skip escaped character
-            } else if (ch == '(') {
-                paren_depth++;
-            } else if (ch == ')') {
-                paren_depth--;
-            } else if ((ch == '|' && paren_depth == 0) || i == len) {
-                // Extract this alternative
-                int alt_len = i - start;
-                
-                if (alt_len > 0) {
-                    char *alt_pattern = malloc(alt_len + 1);
-                    strncpy(alt_pattern, pattern + start, alt_len);
-                    alt_pattern[alt_len] = '\0';
-                    
-                    // Parse this alternative recursively
-                    ASTNode *alternative = parse_pattern(alt_pattern, group_counter);
-                    add_alternation_child(alternation, alternative);
-                    
-                    free(alt_pattern);
-                } else {
-                    // Empty alternative - create an empty sequence
-                    ASTNode *empty_seq = create_ast_node(AST_SEQUENCE);
-                    add_alternation_child(alternation, empty_seq);
-                }
-                
-                start = i + 1;
-            }
-        }
-        
-        return alternation;
-    }
-    
-    // No top-level alternation - proceed with sequence parsing
-    ASTNode *sequence = create_ast_node(AST_SEQUENCE);
-    
-    for (int i = 0; i < len; i++) {
-        char ch = pattern[i];
-        ASTNode *node = NULL;
-        
-        // Handle escape sequences
-        if (ch == '\\' && i + 1 < len) {
-            char escaped = pattern[i + 1];
-            
-            if (escaped == 'd') {
-                // Digit character class [0-9]
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 0;
-                for (int d = '0'; d <= '9'; d++) {
-                    int bit = (unsigned char)d;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                i++; // Skip escaped character
-            } else if (escaped == 'w') {
-                // Word character class [a-zA-Z0-9_]
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 0;
-                for (int c = 'a'; c <= 'z'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                for (int c = 'A'; c <= 'Z'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                for (int c = '0'; c <= '9'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                int bit = (unsigned char)'_';
-                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                i++; // Skip escaped character
-            } else if (escaped == 's') {
-                // Whitespace character class
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 0;
-                const char *whitespace = " \t\n\r\f\v";
-                for (int w = 0; whitespace[w]; w++) {
-                    int bit = (unsigned char)whitespace[w];
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                i++; // Skip escaped character
-            } else if (escaped == 'D') {
-                // Non-digit character class [^0-9]
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 1;
-                for (int d = '0'; d <= '9'; d++) {
-                    int bit = (unsigned char)d;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                i++; // Skip escaped character
-            } else if (escaped == 'W') {
-                // Non-word character class [^a-zA-Z0-9_]
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 1;
-                for (int c = 'a'; c <= 'z'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                for (int c = 'A'; c <= 'Z'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                for (int c = '0'; c <= '9'; c++) {
-                    int bit = (unsigned char)c;
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                int bit = (unsigned char)'_';
-                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                i++; // Skip escaped character
-            } else if (escaped == 'S') {
-                // Non-whitespace character class [^ \t\n\r\f\v]
-                node = create_ast_node(AST_CHARSET);
-                node->data.charset.negate = 1;
-                const char *whitespace = " \t\n\r\f\v";
-                for (int w = 0; whitespace[w]; w++) {
-                    int bit = (unsigned char)whitespace[w];
-                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                }
-                i++; // Skip escaped character
-            } else if (escaped == 'n') {
-                // Newline
-                node = create_ast_node(AST_CHAR);
-                node->data.character = '\n';
-                i++; // Skip escaped character
-            } else if (escaped == 't') {
-                // Tab
-                node = create_ast_node(AST_CHAR);
-                node->data.character = '\t';
-                i++; // Skip escaped character
-            } else if (escaped == 'r') {
-                // Carriage return
-                node = create_ast_node(AST_CHAR);
-                node->data.character = '\r';
-                i++; // Skip escaped character
-            } else {
-                // Regular escaped character
-                node = create_ast_node(AST_CHAR);
-                node->data.character = escaped;
-                i++; // Skip escaped character
-            }
-        } else if (ch == '(') {
-            // Group start - find matching closing paren
-            int paren_depth = 1;
-            int start = i + 1;
-            int end = i + 1;
-            
-            while (end < len && paren_depth > 0) {
-                if (pattern[end] == '(') {
-                    paren_depth++;
-                } else if (pattern[end] == ')') {
-                    paren_depth--;
-                }
-                end++;
-            }
-            
-            if (paren_depth > 0) {
-                // Unmatched paren - treat as literal
-                node = create_ast_node(AST_CHAR);
-                node->data.character = ch;
-            } else {
-                // Create group node
-                node = create_ast_node(AST_GROUP);
-                (*group_counter)++;
-                node->data.group.group_number = *group_counter;
-                
-                // Parse group content
-                int group_len = end - start - 1;
-                char *group_content = malloc(group_len + 1);
-                strncpy(group_content, pattern + start, group_len);
-                group_content[group_len] = '\0';
-                
-                node->data.group.content = parse_pattern(group_content, group_counter);
-                
-                free(group_content);
-                i = end - 1; // Skip to closing paren (will be incremented by loop)
-            }
-        } else if (ch == '[') {
-            // Character class [abc] or [a-z] or [^abc]
-            int class_start = i + 1;
-            int negate = 0;
-            
-            // Check for negation
-            if (class_start < len && pattern[class_start] == '^') {
-                negate = 1;
-                class_start++;
-            }
-            
-            // Find closing ]
-            int class_end = class_start;
-            while (class_end < len && pattern[class_end] != ']') {
-                class_end++;
-            }
-            
-            if (class_end >= len) {
-                // Malformed character class - treat [ as literal
-                node = create_ast_node(AST_CHAR);
-                node->data.character = ch;
-            } else {
-                // Build character class
-                node = create_ast_node(AST_CHARSET);
-                memset(node->data.charset.charset, 0, 32);
-                node->data.charset.negate = negate;
-                
-                // Parse character class content
-                for (int j = class_start; j < class_end; j++) {
-                    // Handle escape sequences within character classes
-                    if (pattern[j] == '\\' && j + 1 < class_end) {
-                        char escape_char = pattern[j + 1];
-                        
-                        if (escape_char == 'd') {
-                            // \d matches [0-9]
-                            for (char c = '0'; c <= '9'; c++) {
-                                int bit = (unsigned char)c;
-                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            }
-                            j++; // Skip escaped character
-                        } else if (escape_char == 'w') {
-                            // \w matches [a-zA-Z0-9_]
-                            for (char c = 'a'; c <= 'z'; c++) {
-                                int bit = (unsigned char)c;
-                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            }
-                            for (char c = 'A'; c <= 'Z'; c++) {
-                                int bit = (unsigned char)c;
-                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            }
-                            for (char c = '0'; c <= '9'; c++) {
-                                int bit = (unsigned char)c;
-                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            }
-                            int bit = (unsigned char)'_';
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            j++; // Skip escaped character
-                        } else if (escape_char == 's') {
-                            // \s matches [ \t\n\r\f\v]
-                            const char *whitespace = " \t\n\r\f\v";
-                            for (int w = 0; whitespace[w]; w++) {
-                                int bit = (unsigned char)whitespace[w];
-                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            }
-                            j++; // Skip escaped character
-                        } else if (escape_char == 'n') {
-                            int bit = (unsigned char)'\n';
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            j++; // Skip escaped character
-                        } else if (escape_char == 't') {
-                            int bit = (unsigned char)'\t';
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            j++; // Skip escaped character
-                        } else if (escape_char == 'r') {
-                            int bit = (unsigned char)'\r';
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            j++; // Skip escaped character
-                        } else {
-                            // Treat as literal escaped character
-                            int bit = (unsigned char)escape_char;
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                            j++; // Skip escaped character
-                        }
-                    } else if (j + 2 < class_end && pattern[j + 1] == '-') {
-                        // Character range: a-z
-                        char start_char = pattern[j];
-                        char end_char = pattern[j + 2];
-                        for (char c = start_char; c <= end_char; c++) {
-                            int bit = (unsigned char)c;
-                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                        j += 2; // Skip the range
-                    } else {
-                        // Individual character
-                        char class_char = pattern[j];
-                        int bit = (unsigned char)class_char;
-                        node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                }
-                
-                i = class_end; // Skip to closing ] (will be incremented by loop)
-            }
-        } else if (ch == '.') {
-            node = create_ast_node(AST_DOT);
-        } else if (ch == '^') {
-            node = create_ast_node(AST_ANCHOR_START);
-        } else if (ch == '$') {
-            node = create_ast_node(AST_ANCHOR_END);
-        } else {
-            // Regular character
-            node = create_ast_node(AST_CHAR);
-            node->data.character = ch;
-        }
-        
-        if (node) {
-            // Check for quantifiers
-            if (i + 1 < len && (pattern[i + 1] == '*' || pattern[i + 1] == '+' || pattern[i + 1] == '?' || pattern[i + 1] == '{')) {
-                char quantifier = pattern[i + 1];
-                ASTNode *quantifier_node = create_ast_node(AST_QUANTIFIER);
-                quantifier_node->data.quantifier.target = node;
-                quantifier_node->data.quantifier.quantifier = quantifier;
-                
-                if (quantifier == '{') {
-                    // Parse {n} or {n,m} quantifier
-                    int brace_start = i + 2;
-                    int brace_end = brace_start;
-                    
-                    // Find closing }
-                    while (brace_end < len && pattern[brace_end] != '}') {
-                        brace_end++;
-                    }
-                    
-                    if (brace_end >= len) {
-                        // Malformed quantifier - treat as literal
-                        free_ast(quantifier_node);
-                        node = create_ast_node(AST_CHAR);
-                        node->data.character = pattern[i + 1];
-                    } else {
-                        // Parse the content between braces
-                        int min_count = 0, max_count = 0;
-                        int has_comma = 0;
-                        
-                        // Parse numbers
-                        int j = brace_start;
-                        while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
-                            min_count = min_count * 10 + (pattern[j] - '0');
-                            j++;
-                        }
-                        
-                        if (j < brace_end && pattern[j] == ',') {
-                            has_comma = 1;
-                            j++;
-                            while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
-                                max_count = max_count * 10 + (pattern[j] - '0');
-                                j++;
-                            }
-                        } else {
-                            max_count = min_count; // {n} same as {n,n}
-                        }
-                        
-                        quantifier_node->data.quantifier.min_count = min_count;
-                        quantifier_node->data.quantifier.max_count = has_comma && max_count == 0 ? -1 : max_count; // -1 for {n,}
-                        
-                        i = brace_end; // Skip to closing }
-                    }
-                } else {
-                    // Simple quantifiers *, +, ?
-                    quantifier_node->data.quantifier.min_count = 0;
-                    quantifier_node->data.quantifier.max_count = 0;
-                    i++; // Skip quantifier
-                }
-                
-                node = quantifier_node;
-            }
-            
-            add_sequence_child(sequence, node);
-        }
-    }
-    
-    return sequence;
-}
-
-// Helper function to count the maximum group number in an AST
-int count_groups(ASTNode *node) {
-    if (!node) return 0;
-    
-    int max_group = 0;
-    
-    switch (node->type) {
-        case AST_GROUP:
-            max_group = node->data.group.group_number;
-            int child_max = count_groups(node->data.group.content);
-            if (child_max > max_group) max_group = child_max;
-            break;
-            
-        case AST_SEQUENCE:
-            for (int i = 0; i < node->data.sequence.child_count; i++) {
-                int child_max = count_groups(node->data.sequence.children[i]);
-                if (child_max > max_group) max_group = child_max;
-            }
-            break;
-            
-        case AST_QUANTIFIER:
-            max_group = count_groups(node->data.quantifier.target);
-            break;
-            
-        case AST_ALTERNATION:
-            for (int i = 0; i < node->data.alternation.alternative_count; i++) {
-                int child_max = count_groups(node->data.alternation.alternatives[i]);
-                if (child_max > max_group) max_group = child_max;
-            }
-            break;
-            
-        default:
-            // Other node types don't contain groups
-            break;
-    }
-    
-    return max_group;
-}
-
-// Helper function to ensure capacity in CompiledRegex during AST compilation
-void ensure_ast_capacity(CompiledRegex *regex, int additional) {
-    while (regex->code_len + additional >= regex->code_capacity) {
-        regex->code_capacity *= 2;
-        regex->code = realloc(regex->code, regex->code_capacity * sizeof(Instruction));
-    }
-}
-
-// Helper function to emit instruction during AST compilation
-int emit_ast_instruction(CompiledRegex *regex, OpCode op) {
-    ensure_ast_capacity(regex, 1);
-    regex->code[regex->code_len].op = op;
-    return regex->code_len++;
-}
-
-// Compile an AST node to bytecode
-void compile_ast_node(ASTNode *node, CompiledRegex *regex) {
-    if (!node) return;
-    
-    switch (node->type) {
-        case AST_CHAR: {
-            int pc = emit_ast_instruction(regex, OP_CHAR);
-            regex->code[pc].c = node->data.character;
-            break;
-        }
-        
-        case AST_DOT: {
-            emit_ast_instruction(regex, OP_DOT);
-            break;
-        }
-        
-        case AST_CHARSET: {
-            int pc = emit_ast_instruction(regex, OP_CHARSET);
-            memcpy(regex->code[pc].charset, node->data.charset.charset, 32);
-            regex->code[pc].negate = node->data.charset.negate;
-            break;
-        }
-        
-        case AST_SEQUENCE: {
-            for (int i = 0; i < node->data.sequence.child_count; i++) {
-                compile_ast_node(node->data.sequence.children[i], regex);
-            }
-            break;
-        }
-        
-        case AST_GROUP: {
-            // Emit SAVE_GROUP start
-            int start_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
-            regex->code[start_pc].group_num = node->data.group.group_number;
-            regex->code[start_pc].is_end = 0;
-            
-            // Compile group content
-            compile_ast_node(node->data.group.content, regex);
-            
-            // Emit SAVE_GROUP end
-            int end_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
-            regex->code[end_pc].group_num = node->data.group.group_number;
-            regex->code[end_pc].is_end = 1;
-            break;
-        }
-        
-        case AST_QUANTIFIER: {
-            char quantifier = node->data.quantifier.quantifier;
-            
-            if (quantifier == '*') {
-                // Zero-or-more: CHOICE +N, SAVE_POINTER, [pattern], ZERO_LENGTH, BRANCH_IF_NOT -N
-                int choice_addr = regex->code_len;
-                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                
-                emit_ast_instruction(regex, OP_SAVE_POINTER);
-                
-                // Compile the target pattern
-                compile_ast_node(node->data.quantifier.target, regex);
-                
-                emit_ast_instruction(regex, OP_ZERO_LENGTH);
-                
-                int branch_pc = emit_ast_instruction(regex, OP_BRANCH_IF_NOT);
-                regex->code[branch_pc].addr = choice_addr - branch_pc;
-                
-                // Update CHOICE to skip to here
-                regex->code[choice_addr].addr = regex->code_len - choice_addr;
-                
-            } else if (quantifier == '+') {
-                // One-or-more: [pattern], CHOICE +2, BRANCH -N
-                int loop_start = regex->code_len;
-                
-                // Compile the target pattern (required first match)
-                compile_ast_node(node->data.quantifier.target, regex);
-                
-                // CHOICE: either continue to next instruction (exit) or jump to pattern again
-                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                regex->code[choice_pc].addr = 2; // Skip BRANCH to exit
-                
-                // BRANCH back to pattern for additional matches
-                int branch_pc = emit_ast_instruction(regex, OP_BRANCH);
-                regex->code[branch_pc].addr = loop_start - branch_pc;
-                
-            } else if (quantifier == '?') {
-                // Zero-or-one: CHOICE +N, [pattern]
-                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                
-                // Compile the target pattern
-                compile_ast_node(node->data.quantifier.target, regex);
-                
-                // Update CHOICE to skip to here
-                regex->code[choice_pc].addr = regex->code_len - choice_pc;
-                
-            } else if (quantifier == '{') {
-                // Exact quantifiers: {n}, {n,m}, {n,}
-                int min_count = node->data.quantifier.min_count;
-                int max_count = node->data.quantifier.max_count;
-                
-                // Generate required matches (min_count times)
-                for (int rep = 0; rep < min_count; rep++) {
-                    compile_ast_node(node->data.quantifier.target, regex);
-                }
-                
-                // Handle additional optional matches
-                if (max_count == -1) {
-                    // {n,} case - unlimited additional matches (like *)
-                    int choice_addr = regex->code_len;
-                    int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                    
-                    emit_ast_instruction(regex, OP_SAVE_POINTER);
-                    
-                    // The pattern to repeat
-                    compile_ast_node(node->data.quantifier.target, regex);
-                    
-                    emit_ast_instruction(regex, OP_ZERO_LENGTH);
-                    
-                    int branch_pc = emit_ast_instruction(regex, OP_BRANCH_IF_NOT);
-                    regex->code[branch_pc].addr = choice_addr - branch_pc;
-                    
-                    // Update CHOICE to skip to here
-                    regex->code[choice_addr].addr = regex->code_len - choice_addr;
-                    
-                } else if (max_count > min_count) {
-                    // {n,m} case - limited additional matches
-                    for (int rep = min_count; rep < max_count; rep++) {
-                        // CHOICE +N (to skip this optional match)
-                        int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                        
-                        // The optional pattern
-                        compile_ast_node(node->data.quantifier.target, regex);
-                        
-                        // Update CHOICE to skip to here
-                        regex->code[choice_pc].addr = regex->code_len - choice_pc;
-                    }
-                }
-            }
-            break;
-        }
-        
-        case AST_ANCHOR_START: {
-            emit_ast_instruction(regex, OP_ANCHOR_START);
-            break;
-        }
-        
-        case AST_ANCHOR_END: {
-            emit_ast_instruction(regex, OP_ANCHOR_END);
-            break;
-        }
-        
-        case AST_ALTERNATION: {
-            // Alternation: CHOICE +skip1, [alt1], BRANCH +end, CHOICE +skip2, [alt2], BRANCH +end, ..., [lastalt]
-            int alternative_count = node->data.alternation.alternative_count;
-            int *branch_addrs = malloc(alternative_count * sizeof(int));
-            
-            // Compile all alternatives except the last
-            for (int i = 0; i < alternative_count - 1; i++) {
-                // Create choice point to skip to next alternative
-                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
-                
-                // Compile this alternative
-                compile_ast_node(node->data.alternation.alternatives[i], regex);
-                
-                // Branch to end of alternation
-                branch_addrs[i] = emit_ast_instruction(regex, OP_BRANCH);
-                
-                // Update CHOICE to skip to next alternative (right here)
-                regex->code[choice_pc].addr = regex->code_len - choice_pc;
-            }
-            
-            // Compile the last alternative (no CHOICE needed)
-            compile_ast_node(node->data.alternation.alternatives[alternative_count - 1], regex);
-            
-            // Update all BRANCH instructions to jump to here (end of alternation)
-            for (int i = 0; i < alternative_count - 1; i++) {
-                regex->code[branch_addrs[i]].addr = regex->code_len - branch_addrs[i];
-            }
-            
-            free(branch_addrs);
-            break;
-        }
-    }
-}
-
-// Compile an AST to bytecode
-CompiledRegex* compile_ast(ASTNode *ast, int flags) {
-    CompiledRegex *regex = malloc(sizeof(CompiledRegex));
-    regex->code = malloc(sizeof(Instruction) * 16);
-    regex->code_len = 0;
-    regex->code_capacity = 16;
-    regex->group_count = 0;
-    regex->flags = flags;
-    
-    // Emit SAVE_GROUP for group 0 (full match) start
-    int start_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
-    regex->code[start_pc].group_num = 0;
-    regex->code[start_pc].is_end = 0;
-    
-    // Compile the AST
-    compile_ast_node(ast, regex);
-    
-    // Count groups by traversing the AST
-    int max_group = count_groups(ast);
-    regex->group_count = max_group + 1; // +1 for group 0
-    
-    // Emit SAVE_GROUP for group 0 end
-    int end_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
-    regex->code[end_pc].group_num = 0;
-    regex->code[end_pc].is_end = 1;
-    
-    // Emit MATCH instruction
-    emit_ast_instruction(regex, OP_MATCH);
-    
-    return regex;
-}
-
-// ================================================================
-// NEW LEXER + PARSER WITH PROPER PRECEDENCE
-// ================================================================
-
-
 #include "lexer.c" // AMALGAMATE
 
 #include "parser.c" // AMALGAMATE
+
+#include "compiler.c" // AMALGAMATE
+
+// Debug function to display AST recursively
+void debug_display_ast(ASTNode *node, int depth) {
+    if (!node) return;
+    
+    // Print indentation
+    for (int i = 0; i < depth; i++) {
+        printf("  ");
+    }
+    
+    switch (node->type) {
+        case AST_CHAR:
+            printf("CHAR '%c'\n", node->data.character);
+            break;
+        case AST_DOT:
+            printf("DOT\n");
+            break;
+        case AST_CHARSET:
+            printf("CHARSET [%s]\n", node->data.charset.negate ? "negated" : "normal");
+            break;
+        case AST_SEQUENCE:
+            printf("SEQUENCE (%d children)\n", node->data.sequence.child_count);
+            for (int i = 0; i < node->data.sequence.child_count; i++) {
+                debug_display_ast(node->data.sequence.children[i], depth + 1);
+            }
+            break;
+        case AST_ALTERNATION:
+            printf("ALTERNATION (%d alternatives)\n", node->data.alternation.alternative_count);
+            for (int i = 0; i < node->data.alternation.alternative_count; i++) {
+                debug_display_ast(node->data.alternation.alternatives[i], depth + 1);
+            }
+            break;
+        case AST_QUANTIFIER:
+            printf("QUANTIFIER '%c' min=%d max=%d\n", 
+                   node->data.quantifier.quantifier,
+                   node->data.quantifier.min_count,
+                   node->data.quantifier.max_count);
+            debug_display_ast(node->data.quantifier.target, depth + 1);
+            break;
+        case AST_GROUP:
+            printf("GROUP #%d\n", node->data.group.group_number);
+            debug_display_ast(node->data.group.content, depth + 1);
+            break;
+        case AST_ANCHOR_START:
+            printf("ANCHOR_START\n");
+            break;
+        case AST_ANCHOR_END:
+            printf("ANCHOR_END\n");
+            break;
+        default:
+            printf("UNKNOWN(%d)\n", node->type);
+    }
+}
+
+// Debug function to parse and display AST
+void debug_display_pattern_ast(const char *pattern) {
+    printf("=== NEW PARSER AST for: %s ===\n", pattern);
+    
+    int group_counter = 0;
+    ASTNode *ast = parse_pattern(pattern, &group_counter);
+    
+    if (ast) {
+        debug_display_ast(ast, 0);
+        free_ast(ast);
+    } else {
+        printf("Parse failed\n");
+    }
+    printf("\n");
+}
+
+// Debug function to display token stream
+void debug_display_token_stream(const char *pattern) {
+    printf("=== Token stream for: %s ===\n", pattern);
+    
+    Lexer *lexer = lexer_new(pattern);
+    Token *token;
+    int token_count = 0;
+    
+    while ((token = lexer_peek(lexer)) && token->type != TOK_EOF) {
+        printf("Token %d: ", token_count++);
+        
+        switch (token->type) {
+            case TOK_CHAR:
+                printf("CHAR '%c'", token->data.character);
+                break;
+            case TOK_DOT:
+                printf("DOT");
+                break;
+            case TOK_STAR:
+                printf("STAR");
+                break;
+            case TOK_PLUS:
+                printf("PLUS");
+                break;
+            case TOK_QUESTION:
+                printf("QUESTION");
+                break;
+            case TOK_QUANTIFIER:
+                printf("QUANTIFIER {%d,%d}", token->data.min_count, token->data.max_count);
+                break;
+            case TOK_CHARSET:
+                printf("CHARSET [%s]", token->data.negate ? "negated" : "normal");
+                break;
+            case TOK_CARET:
+                printf("CARET");
+                break;
+            case TOK_DOLLAR:
+                printf("DOLLAR");
+                break;
+            case TOK_PIPE:
+                printf("PIPE");
+                break;
+            case TOK_LPAREN:
+                printf("LPAREN");
+                break;
+            case TOK_RPAREN:
+                printf("RPAREN");
+                break;
+            case TOK_LBRACKET:
+                printf("LBRACKET");
+                break;
+            case TOK_RBRACKET:
+                printf("RBRACKET");
+                break;
+            case TOK_LBRACE:
+                printf("LBRACE");
+                break;
+            case TOK_RBRACE:
+                printf("RBRACE");
+                break;
+            case TOK_ERROR:
+                printf("ERROR");
+                break;
+            default:
+                printf("UNKNOWN(%d)", token->type);
+        }
+        printf("\n");
+        
+        lexer_next(lexer); // Advance to next token
+    }
+    
+    printf("Token %d: EOF\n", token_count);
+    lexer_free(lexer);
+    printf("\n");
+}

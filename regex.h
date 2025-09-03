@@ -168,10 +168,13 @@ MatchIterator* string_match_all(const char *text, RegExp *regexp);
 MatchResult* match_iterator_next(MatchIterator *iter);
 void match_iterator_free(MatchIterator *iter);
 
-// AST parsing functions
-ASTNode* parse_pattern(const char *pattern, int *group_counter);
+// AST parsing functions (old parse_pattern removed - using lexer+parser)
 ASTNode* create_ast_node(ASTNodeType type);
 void free_ast(ASTNode *node);
 CompiledRegex* compile_ast(ASTNode *ast, int flags);
+
+// Debug functions
+void debug_display_token_stream(const char *pattern);
+void debug_display_pattern_ast(const char *pattern);
 
 #endif // REGEX_H
