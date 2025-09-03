@@ -32,6 +32,12 @@ typedef struct {
     // Backtracking limit to prevent exponential behavior
     int backtrack_count;
     int max_backtracks;
+    
+    // Advanced loop detection
+    int *loop_detection_pc;
+    int *loop_detection_text;
+    int *loop_detection_count;
+    int loop_detection_size;
 } VMState;
 
 // Parser for building bytecode
@@ -512,7 +518,24 @@ static int pop_backtrack(VMState *state) {
         return 0; // Give up to prevent hang
     }
     
-    BacktrackFrame *frame = &state->stack[--state->stack_top];
+    BacktrackFrame *frame = &state->stack[state->stack_top - 1];
+    
+    // Advanced loop detection: track multiple PC/text_pos combinations
+    int key = (frame->pc * 31 + frame->text_pos) % state->loop_detection_size;
+    if (state->loop_detection_pc[key] == frame->pc && 
+        state->loop_detection_text[key] == frame->text_pos) {
+        state->loop_detection_count[key]++;
+        if (state->loop_detection_count[key] > 20) { // Lower threshold for safety
+            return 0; // Break the loop
+        }
+    } else {
+        state->loop_detection_pc[key] = frame->pc;
+        state->loop_detection_text[key] = frame->text_pos;
+        state->loop_detection_count[key] = 1;
+    }
+    
+    state->stack_top--;
+    frame = &state->stack[state->stack_top];
     state->pc = frame->pc;
     state->text_pos = frame->text_pos;
     
@@ -569,7 +592,11 @@ static int vm_match_char(VMState *state, VMInstruction *inst, char c) {
 
 // Execute VM
 static int vm_execute(CompiledRegex *regex, VMState *state) {
-    while (state->pc < regex->code_len) {
+    int instruction_count = 0;
+    const int max_instructions = 100000; // Prevent infinite loops in VM
+    
+    while (state->pc < regex->code_len && instruction_count < max_instructions) {
+        instruction_count++;
         VMInstruction *inst = &regex->code[state->pc];
         
         switch (inst->op) {
@@ -675,7 +702,17 @@ MatchResult* regex_execute(CompiledRegex *regex, const char *text, int start_pos
             .stack_top = 0,
             .stack_capacity = 64,
             .backtrack_count = 0,
-            .max_backtracks = 10000  // Reasonable limit to prevent hangs
+            .max_backtracks = 1000,  // Much lower limit to prevent hangs
+            .loop_detection_size = 256
+        };
+        
+        // Initialize loop detection arrays
+        state.loop_detection_pc = calloc(256, sizeof(int));
+        state.loop_detection_text = calloc(256, sizeof(int));
+        state.loop_detection_count = calloc(256, sizeof(int));
+        for (int i = 0; i < 256; i++) {
+            state.loop_detection_pc[i] = -1;
+            state.loop_detection_text[i] = -1;
         };
         
         // Initialize group positions
@@ -712,6 +749,9 @@ MatchResult* regex_execute(CompiledRegex *regex, const char *text, int start_pos
                 free(state.stack[i].group_ends);
             }
             free(state.stack);
+            free(state.loop_detection_pc);
+            free(state.loop_detection_text);
+            free(state.loop_detection_count);
             
             return result;
         }
@@ -724,6 +764,9 @@ MatchResult* regex_execute(CompiledRegex *regex, const char *text, int start_pos
         free(state.stack);
         free(state.group_starts);
         free(state.group_ends);
+        free(state.loop_detection_pc);
+        free(state.loop_detection_text);
+        free(state.loop_detection_count);
         
         if (regex->flags & FLAG_STICKY) break; // Only try at exact position
     }
