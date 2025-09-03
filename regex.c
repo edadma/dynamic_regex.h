@@ -106,7 +106,64 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             continue;
         }
         
-        // Check for quantifiers
+        // Handle character classes [...]
+        if (ch == '[') {
+            // Parse character class
+            int class_start = i + 1;
+            int negate = 0;
+            
+            // Check for negation
+            if (class_start < pattern_len && pattern[class_start] == '^') {
+                negate = 1;
+                class_start++;
+            }
+            
+            int class_end = class_start;
+            
+            // Find the closing ]
+            class_end = class_start;
+            while (class_end < pattern_len && pattern[class_end] != ']') {
+                class_end++;
+            }
+            
+            if (class_end >= pattern_len) {
+                // Malformed character class - treat [ as literal
+                regex->code[pc].op = OP_CHAR;
+                regex->code[pc].c = ch;
+                pc++;
+                continue;
+            }
+            
+            // Build character class
+            regex->code[pc].op = OP_CHARSET;
+            memset(regex->code[pc].charset, 0, sizeof(regex->code[pc].charset));
+            regex->code[pc].negate = negate;
+            
+            // Parse the character class content
+            for (int j = class_start; j < class_end; j++) {
+                if (j + 2 < class_end && pattern[j + 1] == '-') {
+                    // Character range: a-z (but make sure j+2 is not the last char)
+                    char start_char = pattern[j];
+                    char end_char = pattern[j + 2];
+                    for (char c = start_char; c <= end_char; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    j += 2; // Skip the range
+                } else {
+                    // Individual character
+                    char class_char = pattern[j];
+                    int bit = (unsigned char)class_char;
+                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                }
+            }
+            
+            pc++;
+            i = class_end; // Skip to after the ]
+            continue;
+        }
+        
+        // Check for quantifiers - but character classes are already handled above
         if (i + 1 < pattern_len && pattern[i + 1] == '*') {
             // Zero-or-more quantifier: X*
             int choice_addr = pc;
@@ -143,7 +200,7 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             
             i++; // Skip the '*' character
         } else {
-            // Regular character or dot
+            // Regular character or dot (character classes handled above)
             if (ch == '.') {
                 regex->code[pc].op = OP_DOT;
             } else {
@@ -259,6 +316,33 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
                 vm->pc++;
                 vm->last_match_was_zero_length = 0;
                 vm->last_operation_success = 1;
+                break;
+                
+            case OP_CHARSET:
+                if (vm->pos >= vm->text_len) {
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                    continue;
+                }
+                // Check if character matches the character class
+                char test_ch = vm->text[vm->pos];
+                int bit = (unsigned char)test_ch;
+                int matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
+                
+                // Apply negation if needed
+                if (inst->negate) {
+                    matches = !matches;
+                }
+                
+                if (matches) {
+                    vm->pos++;
+                    vm->pc++;
+                    vm->last_match_was_zero_length = 0;
+                    vm->last_operation_success = 1;
+                } else {
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                }
                 break;
                 
             case OP_CHOICE:
@@ -430,7 +514,19 @@ void print_regex_bytecode(CompiledRegex *compiled) {
         switch (compiled->code[i].op) {
             case OP_CHAR: printf("CHAR '%c'", compiled->code[i].c); break;
             case OP_DOT: printf("DOT"); break;
-            case OP_CHARSET: printf("CHARSET"); break;
+            case OP_CHARSET: 
+                printf("CHARSET%s [", compiled->code[i].negate ? " (negated)" : "");
+                for (int j = 0; j < 256; j++) {
+                    if (compiled->code[i].charset[j / 8] & (1 << (j % 8))) {
+                        if (j >= 32 && j < 127) {
+                            printf("%c", j);
+                        } else {
+                            printf("\\x%02x", j);
+                        }
+                    }
+                }
+                printf("]");
+                break;
             case OP_CHOICE: printf("CHOICE +%d (to %d)", compiled->code[i].addr, i + compiled->code[i].addr); break;
             case OP_BRANCH: printf("BRANCH +%d (to %d)", compiled->code[i].addr, i + compiled->code[i].addr); break;
             case OP_BRANCH_IF_NOT: printf("BRANCH_IF_NOT +%d (to %d)", compiled->code[i].addr, i + compiled->code[i].addr); break;

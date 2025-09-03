@@ -100,23 +100,61 @@ void test_multiline_anchors(void) {
 
 // Character class tests
 void test_character_classes(void) {
+    // Basic character classes
     ASSERT_MATCH("[abc]", "apple");
     ASSERT_MATCH("[abc]", "banana");
     ASSERT_MATCH("[abc]", "cherry");
     ASSERT_NO_MATCH("[abc]", "dog");
 
+    // Single ranges
     ASSERT_MATCH("[a-z]", "hello");
     ASSERT_MATCH("[A-Z]", "HELLO");
     ASSERT_MATCH("[0-9]", "123");
     ASSERT_NO_MATCH("[a-z]", "HELLO");
+    
+    // Combined ranges and individual characters
+    ASSERT_MATCH("[a-zA-Z]", "Hello");
+    ASSERT_MATCH("[a-zA-Z]", "hello");
+    ASSERT_MATCH("[a-zA-Z]", "HELLO");
+    ASSERT_NO_MATCH("[a-zA-Z]", "123");
+    
+    // Multiple ranges with individual characters
+    ASSERT_MATCH("[a-zA-Z0-9_]", "hello123");
+    ASSERT_MATCH("[a-zA-Z0-9_]", "Test_42");
+    ASSERT_MATCH("[a-zA-Z0-9_]", "_private");
+    ASSERT_NO_MATCH("[a-zA-Z0-9_]", "@");
+    
+    // Mixed individual chars and ranges
+    ASSERT_MATCH("[aeiou0-9]", "a1");
+    ASSERT_MATCH("[aeiou0-9]", "e");
+    ASSERT_MATCH("[aeiou0-9]", "5");
+    ASSERT_NO_MATCH("[aeiou0-9]", "x");
+    
+    // Special characters in classes
+    ASSERT_MATCH("[.-/]", ".txt");
+    ASSERT_MATCH("[.-/]", "/path");
+    ASSERT_NO_MATCH("[.-/]", "abc");
 }
 
 void test_negated_character_classes(void) {
+    // Basic negated classes
     ASSERT_MATCH("[^abc]", "dog");
     ASSERT_NO_MATCH("[^abc]", "a");
     ASSERT_MATCH("[^a-z]", "HELLO");
     ASSERT_MATCH("[^a-z]", "123");
     ASSERT_NO_MATCH("[^a-z]", "hello");
+    
+    // Negated combined ranges
+    ASSERT_NO_MATCH("[^a-zA-Z0-9_]", "hello123");
+    ASSERT_NO_MATCH("[^a-zA-Z0-9_]", "Test_42");
+    ASSERT_MATCH("[^a-zA-Z0-9_]", "@");
+    ASSERT_MATCH("[^a-zA-Z0-9_]", "!");
+    
+    // Negated mixed patterns
+    ASSERT_NO_MATCH("[^aeiou0-9]", "a");
+    ASSERT_NO_MATCH("[^aeiou0-9]", "5");
+    ASSERT_MATCH("[^aeiou0-9]", "x");
+    ASSERT_MATCH("[^aeiou0-9]", "z");
 }
 
 // Escape sequence tests
@@ -468,10 +506,10 @@ int main(void) {
     RUN_TEST(test_end_anchor);
     RUN_TEST(test_multiline_anchors);
 
-    // // Character classes
-    // RUN_TEST(test_character_classes);
-    // RUN_TEST(test_negated_character_classes);
-    //
+    // Character classes
+    RUN_TEST(test_character_classes);
+    RUN_TEST(test_negated_character_classes);
+
     // // Escape sequences
     // RUN_TEST(test_digit_escape);
     // RUN_TEST(test_word_escape);
