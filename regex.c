@@ -94,6 +94,18 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
     for (int i = 0; i < pattern_len; i++) {
         char ch = pattern[i];
         
+        // Handle anchors
+        if (ch == '^') {
+            regex->code[pc].op = OP_ANCHOR_START;
+            pc++;
+            continue;
+        }
+        if (ch == '$') {
+            regex->code[pc].op = OP_ANCHOR_END;
+            pc++;
+            continue;
+        }
+        
         // Check for quantifiers
         if (i + 1 < pattern_len && pattern[i + 1] == '*') {
             // Zero-or-more quantifier: X*
@@ -301,6 +313,40 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
                 vm->pc++;
                 break;
                 
+            case OP_ANCHOR_START:
+                // Match start of string, or start of line in multiline mode
+                if (vm->pos == 0) {
+                    // At start of string - always matches
+                    vm->pc++;
+                    vm->last_operation_success = 1;
+                } else if ((vm->flags & 8) && vm->pos > 0 && vm->text[vm->pos - 1] == '\n') {
+                    // Multiline mode and after a newline - matches start of line
+                    vm->pc++;
+                    vm->last_operation_success = 1;
+                } else {
+                    // Doesn't match
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                }
+                break;
+                
+            case OP_ANCHOR_END:
+                // Match end of string, or end of line in multiline mode
+                if (vm->pos == vm->text_len) {
+                    // At end of string - always matches
+                    vm->pc++;
+                    vm->last_operation_success = 1;
+                } else if ((vm->flags & 8) && vm->text[vm->pos] == '\n') {
+                    // Multiline mode and before a newline - matches end of line
+                    vm->pc++;
+                    vm->last_operation_success = 1;
+                } else {
+                    // Doesn't match
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                }
+                break;
+                
             case OP_MATCH:
                 return 1;
                 
@@ -394,6 +440,8 @@ void print_regex_bytecode(CompiledRegex *compiled) {
             case OP_SAVE_GROUP: printf("SAVE_GROUP %d %s", 
                 compiled->code[i].group_num, 
                 compiled->code[i].is_end ? "END" : "START"); break;
+            case OP_ANCHOR_START: printf("ANCHOR_START"); break;
+            case OP_ANCHOR_END: printf("ANCHOR_END"); break;
             case OP_MATCH: printf("MATCH"); break;
             default: printf("UNKNOWN(%d)", compiled->code[i].op); break;
         }

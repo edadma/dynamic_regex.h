@@ -16,6 +16,8 @@ typedef enum {
     OP_RESTORE_POSITION,  // Restore position from integer data stack
     OP_SAVE_GROUP,        // Save capture group start/end
     OP_ZERO_LENGTH,       // Check for zero-length match
+    OP_ANCHOR_START,      // Match start of string/line
+    OP_ANCHOR_END,        // Match end of string/line
     OP_MATCH,             // Success
     OP_FAIL               // Explicit failure
 } OpCode;

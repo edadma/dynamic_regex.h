@@ -463,11 +463,11 @@ int main(void) {
     RUN_TEST(test_dot_wildcard);
     RUN_TEST(test_dot_with_dotall_flag);
 
-    // // Anchors
-    // RUN_TEST(test_start_anchor);
-    // RUN_TEST(test_end_anchor);
-    // RUN_TEST(test_multiline_anchors);
-    //
+    // Anchors
+    RUN_TEST(test_start_anchor);
+    RUN_TEST(test_end_anchor);
+    RUN_TEST(test_multiline_anchors);
+
     // // Character classes
     // RUN_TEST(test_character_classes);
     // RUN_TEST(test_negated_character_classes);
