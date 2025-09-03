@@ -11,5 +11,6 @@ include_directories(devdeps/unity)
 add_executable(dynamic_regex_h 
     main.c
     regex.c
+    int_stack.c
     devdeps/unity/unity.c
 )
