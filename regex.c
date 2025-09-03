@@ -177,11 +177,29 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
         
         switch (inst->op) {
             case OP_CHAR:
-                if (vm->pos >= vm->text_len || vm->text[vm->pos] != inst->c) {
+                if (vm->pos >= vm->text_len) {
                     vm->last_operation_success = 0;
                     if (!pop_choice(vm)) return 0;
                     continue;
                 }
+                
+                char text_char = vm->text[vm->pos];
+                char pattern_char = inst->c;
+                
+                // Check for match (case sensitive or insensitive)
+                int char_matches = 0;
+                if (vm->flags & 2) { // Case insensitive flag 'i'
+                    char_matches = (tolower(text_char) == tolower(pattern_char));
+                } else {
+                    char_matches = (text_char == pattern_char);
+                }
+                
+                if (!char_matches) {
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                    continue;
+                }
+                
                 vm->pos++;
                 vm->pc++;
                 vm->last_match_was_zero_length = 0;
@@ -213,10 +231,29 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
                     if (!pop_choice(vm)) return 0;
                     continue;
                 }
+                
                 // Check if character matches the character class
                 char test_ch = vm->text[vm->pos];
+                int matches = 0;
+                
+                // Check direct character match
                 int bit = (unsigned char)test_ch;
-                int matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
+                matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
+                
+                // If case insensitive flag is set and no match yet, try opposite case
+                if (!matches && (vm->flags & 2)) { // Case insensitive flag 'i'
+                    char opposite_case;
+                    if (islower(test_ch)) {
+                        opposite_case = toupper(test_ch);
+                    } else if (isupper(test_ch)) {
+                        opposite_case = tolower(test_ch);
+                    } else {
+                        opposite_case = test_ch; // No case change for non-letters
+                    }
+                    
+                    bit = (unsigned char)opposite_case;
+                    matches = (inst->charset[bit / 8] & (1 << (bit % 8))) != 0;
+                }
                 
                 // Apply negation if needed
                 if (inst->negate) {
@@ -544,8 +581,30 @@ int regex_test(RegExp *regexp, const char *text) {
 MatchResult* regex_exec(RegExp *regexp, const char *text) {
     if (!regexp || !regexp->compiled || !text) return NULL;
     
-    DetailedMatch detailed = execute_regex_detailed(regexp->compiled, text, 0);
-    if (!detailed.matched) return NULL;
+    // Check if this is a global regex and should continue from last_index
+    int start_pos = 0;
+    if (regexp->compiled->flags & 4) { // Global flag 'g'
+        start_pos = regexp->last_index;
+        
+        // If last_index is beyond the text, return NULL (no more matches)
+        if (start_pos >= (int)strlen(text)) {
+            return NULL;
+        }
+    }
+    
+    DetailedMatch detailed = execute_regex_detailed(regexp->compiled, text, start_pos);
+    if (!detailed.matched) {
+        // For global regex, reset last_index when no match found
+        if (regexp->compiled->flags & 4) {
+            regexp->last_index = 0;
+        }
+        return NULL;
+    }
+    
+    // For global regex, update last_index to end of this match
+    if (regexp->compiled->flags & 4) {
+        regexp->last_index = detailed.match_end;
+    }
     
     // Create MatchResult with captured groups
     MatchResult *match = malloc(sizeof(MatchResult));
