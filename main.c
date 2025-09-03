@@ -487,9 +487,9 @@ void test_url_pattern(void) {
 
     ASSERT_MATCH(url_pattern, "http://example.com");
     ASSERT_MATCH(url_pattern, "https://www.example.com/path");
-    // ASSERT_MATCH(url_pattern, "https://sub.domain.com/path?query=1");
-    // ASSERT_NO_MATCH(url_pattern, "ftp://example.com");
-    // ASSERT_NO_MATCH(url_pattern, "http://");
+    ASSERT_MATCH(url_pattern, "https://sub.domain.com/path?query=1");
+    ASSERT_NO_MATCH(url_pattern, "ftp://example.com");
+    ASSERT_NO_MATCH(url_pattern, "http://");
 }
 
 // Error handling tests
@@ -647,19 +647,19 @@ int main(void) {
     RUN_TEST(test_phone_pattern);
     RUN_TEST(test_url_pattern);
 
-    // // Error handling
-    // RUN_TEST(test_null_inputs);
-    // RUN_TEST(test_invalid_quantifiers);
-    //
-    // // Performance
-    // RUN_TEST(test_pathological_patterns);
-    // RUN_TEST(test_large_input);
-    //
-    // // Memory management
-    // RUN_TEST(test_memory_cleanup);
-    //
-    // // Integration
-    // RUN_TEST(test_complex_integration);
+    // Error handling
+    RUN_TEST(test_null_inputs);
+    RUN_TEST(test_invalid_quantifiers);
+
+    // Performance
+    RUN_TEST(test_pathological_patterns);
+    RUN_TEST(test_large_input);
+
+    // Memory management
+    RUN_TEST(test_memory_cleanup);
+
+    // Integration
+    RUN_TEST(test_complex_integration);
 
     return UNITY_END();
 }
