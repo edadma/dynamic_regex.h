@@ -55,7 +55,7 @@ static void emit_jump(Compiler *c, OpCode op, int addr) {
     c->code[c->code_len - 1].addr = addr;
 }
 
-// Simple compilation - just handle a* for now
+// Enhanced compilation to handle basic patterns
 CompiledRegex* compile_regex(const char *pattern, int flags) {
     CompiledRegex *regex = malloc(sizeof(CompiledRegex));
     regex->code = malloc(64 * sizeof(Instruction));
@@ -64,39 +64,95 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
     regex->group_count = 1;
     regex->flags = flags;
     
-    // Hardcode the a* pattern for testing
+    // Handle empty pattern - matches everything
+    if (!pattern || strlen(pattern) == 0) {
+        regex->code[0].op = OP_SAVE_GROUP;
+        regex->code[0].group_num = 0;
+        regex->code[0].is_end = 0;
+        
+        regex->code[1].op = OP_SAVE_GROUP;
+        regex->code[1].group_num = 0;
+        regex->code[1].is_end = 1;
+        
+        regex->code[2].op = OP_MATCH;
+        regex->code_len = 3;
+        return regex;
+    }
+    
+    
+    // General pattern compilation
+    int pc = 0;
+    
     // SAVE_GROUP 0 START
-    regex->code[0].op = OP_SAVE_GROUP;
-    regex->code[0].group_num = 0;
-    regex->code[0].is_end = 0;
+    regex->code[pc].op = OP_SAVE_GROUP;
+    regex->code[pc].group_num = 0;
+    regex->code[pc].is_end = 0;
+    pc++;
     
-    // CHOICE +5 (skip to end)
-    regex->code[1].op = OP_CHOICE;
-    regex->code[1].addr = 5;
-    
-    // SAVE_POINTER
-    regex->code[2].op = OP_SAVE_POINTER;
-    
-    // CHAR 'a'
-    regex->code[3].op = OP_CHAR;
-    regex->code[3].c = 'a';
-    
-    // ZERO_LENGTH
-    regex->code[4].op = OP_ZERO_LENGTH;
-    
-    // BRANCH_IF_NOT -4 (back to CHOICE)
-    regex->code[5].op = OP_BRANCH_IF_NOT;
-    regex->code[5].addr = -4;
+    // Compile each character in the pattern
+    int pattern_len = strlen(pattern);
+    for (int i = 0; i < pattern_len; i++) {
+        char ch = pattern[i];
+        
+        // Check for quantifiers
+        if (i + 1 < pattern_len && pattern[i + 1] == '*') {
+            // Zero-or-more quantifier: X*
+            int choice_addr = pc;
+            
+            // CHOICE +N (to skip the loop)
+            regex->code[pc].op = OP_CHOICE;
+            pc++;
+            int choice_pc = pc - 1;  // Remember location to patch
+            
+            // SAVE_POINTER
+            regex->code[pc].op = OP_SAVE_POINTER;
+            pc++;
+            
+            // The character/pattern to repeat
+            if (ch == '.') {
+                regex->code[pc].op = OP_DOT;
+            } else {
+                regex->code[pc].op = OP_CHAR;
+                regex->code[pc].c = ch;
+            }
+            pc++;
+            
+            // ZERO_LENGTH
+            regex->code[pc].op = OP_ZERO_LENGTH;
+            pc++;
+            
+            // BRANCH_IF_NOT back to choice
+            regex->code[pc].op = OP_BRANCH_IF_NOT;
+            regex->code[pc].addr = choice_addr - pc;
+            pc++;
+            
+            // Patch the CHOICE instruction to jump here
+            regex->code[choice_pc].addr = pc - choice_pc;
+            
+            i++; // Skip the '*' character
+        } else {
+            // Regular character or dot
+            if (ch == '.') {
+                regex->code[pc].op = OP_DOT;
+            } else {
+                regex->code[pc].op = OP_CHAR;
+                regex->code[pc].c = ch;
+            }
+            pc++;
+        }
+    }
     
     // SAVE_GROUP 0 END
-    regex->code[6].op = OP_SAVE_GROUP;
-    regex->code[6].group_num = 0;
-    regex->code[6].is_end = 1;
+    regex->code[pc].op = OP_SAVE_GROUP;
+    regex->code[pc].group_num = 0;
+    regex->code[pc].is_end = 1;
+    pc++;
     
     // MATCH
-    regex->code[7].op = OP_MATCH;
+    regex->code[pc].op = OP_MATCH;
+    pc++;
     
-    regex->code_len = 8;
+    regex->code_len = pc;
     return regex;
 }
 
@@ -176,12 +232,21 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
                 
             case OP_DOT:
                 if (vm->pos >= vm->text_len) {
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                    continue;
+                }
+                // Check if we should match newlines (dotall flag)
+                char ch = vm->text[vm->pos];
+                if (ch == '\n' && !(vm->flags & 1)) {  // 's' flag not set
+                    vm->last_operation_success = 0;
                     if (!pop_choice(vm)) return 0;
                     continue;
                 }
                 vm->pos++;
                 vm->pc++;
                 vm->last_match_was_zero_length = 0;
+                vm->last_operation_success = 1;
                 break;
                 
             case OP_CHOICE:
@@ -343,8 +408,21 @@ RegExp* regex_new(const char *pattern, const char *flags) {
     regexp->flags = strdup(flags);
     regexp->last_index = 0;
     
-    // For now, only support hardcoded "a*" pattern - will need full parser later
-    regexp->compiled = compile_regex(pattern, 0);
+    // Parse flags to integer
+    int flag_bits = 0;
+    if (flags) {
+        for (int i = 0; flags[i]; i++) {
+            switch (flags[i]) {
+                case 's': flag_bits |= 1; break;  // dotall
+                case 'i': flag_bits |= 2; break;  // ignorecase  
+                case 'g': flag_bits |= 4; break;  // global
+                case 'm': flag_bits |= 8; break;  // multiline
+                // Add other flags as needed
+            }
+        }
+    }
+    
+    regexp->compiled = compile_regex(pattern, flag_bits);
     
     return regexp;
 }
