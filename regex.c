@@ -71,506 +71,40 @@ static int emit_instruction(CompiledRegex *regex, OpCode op) {
 }
 
 // Enhanced compilation to handle basic patterns
+// New AST-based compile_regex function
 CompiledRegex* compile_regex(const char *pattern, int flags) {
-    CompiledRegex *regex = malloc(sizeof(CompiledRegex));
-    regex->code = malloc(64 * sizeof(Instruction));
-    regex->code_len = 0;
-    regex->code_capacity = 64;
-    regex->group_count = 1;
-    regex->flags = flags;
-    
-    // Handle empty pattern - matches everything
+    // Handle empty pattern
     if (!pattern || strlen(pattern) == 0) {
-        int start_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
-        regex->code[start_group_pc].group_num = 0;
-        regex->code[start_group_pc].is_end = 0;
+        CompiledRegex *regex = malloc(sizeof(CompiledRegex));
+        regex->code = malloc(sizeof(Instruction) * 4);
+        regex->code_len = 0;
+        regex->code_capacity = 4;
+        regex->group_count = 1;
+        regex->flags = flags;
         
-        int end_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
-        regex->code[end_group_pc].group_num = 0;
-        regex->code[end_group_pc].is_end = 1;
+        int start_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+        regex->code[start_pc].group_num = 0;
+        regex->code[start_pc].is_end = 0;
         
-        emit_instruction(regex, OP_MATCH);
-        regex->code_len = regex->code_len;
+        int end_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+        regex->code[end_pc].group_num = 0;
+        regex->code[end_pc].is_end = 1;
+        
+        emit_ast_instruction(regex, OP_MATCH);
         return regex;
     }
     
+    // Parse pattern to AST
+    int group_counter = 0;
+    ASTNode *ast = parse_pattern(pattern, &group_counter);
     
-    // General pattern compilation
-    int pc = 0;
+    // Compile AST to bytecode
+    CompiledRegex *compiled = compile_ast(ast, flags);
     
-    // SAVE_GROUP 0 START
-    int start_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
-    regex->code[start_group_pc].group_num = 0;
-    regex->code[start_group_pc].is_end = 0;
-    pc = regex->code_len;
+    // Clean up AST
+    free_ast(ast);
     
-    // Compile each character in the pattern
-    int pattern_len = strlen(pattern);
-    for (int i = 0; i < pattern_len; i++) {
-        char ch = pattern[i];
-        
-        // Handle anchors
-        if (ch == '^') {
-            emit_instruction(regex, OP_ANCHOR_START);
-            pc = regex->code_len;
-            continue;
-        }
-        if (ch == '$') {
-            emit_instruction(regex, OP_ANCHOR_END);
-            pc = regex->code_len;
-            continue;
-        }
-        
-        // Handle escape sequences
-        if (ch == '\\' && i + 1 < pattern_len) {
-            char escape_char = pattern[i + 1];
-            
-            // Handle character class escapes
-            if (escape_char == 'd' || escape_char == 'D' ||
-                escape_char == 'w' || escape_char == 'W' ||
-                escape_char == 's' || escape_char == 'S') {
-                
-                int charset_pc = emit_instruction(regex, OP_CHARSET);
-                memset(regex->code[charset_pc].charset, 0, sizeof(regex->code[charset_pc].charset));
-                
-                if (escape_char == 'd') {
-                    // \d matches [0-9]
-                    regex->code[charset_pc].negate = 0;
-                    for (char c = '0'; c <= '9'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                } else if (escape_char == 'D') {
-                    // \D matches [^0-9]
-                    regex->code[charset_pc].negate = 1;
-                    for (char c = '0'; c <= '9'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                } else if (escape_char == 'w') {
-                    // \w matches [a-zA-Z0-9_]
-                    regex->code[charset_pc].negate = 0;
-                    for (char c = 'a'; c <= 'z'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    for (char c = 'A'; c <= 'Z'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    for (char c = '0'; c <= '9'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    int bit = (unsigned char)'_';
-                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                } else if (escape_char == 'W') {
-                    // \W matches [^a-zA-Z0-9_]
-                    regex->code[charset_pc].negate = 1;
-                    for (char c = 'a'; c <= 'z'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    for (char c = 'A'; c <= 'Z'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    for (char c = '0'; c <= '9'; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    int bit = (unsigned char)'_';
-                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                } else if (escape_char == 's') {
-                    // \s matches [ \t\n\r\f\v]
-                    regex->code[charset_pc].negate = 0;
-                    int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
-                    for (int j = 0; j < 6; j++) {
-                        int bit = (unsigned char)space_chars[j];
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                } else if (escape_char == 'S') {
-                    // \S matches [^ \t\n\r\f\v]
-                    regex->code[charset_pc].negate = 1;
-                    int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
-                    for (int j = 0; j < 6; j++) {
-                        int bit = (unsigned char)space_chars[j];
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                }
-                
-                pc = regex->code_len;
-                i += 2; // Skip both \ and the escape character
-                continue;
-            }
-            
-            // Handle literal escapes
-            if (escape_char == 'n' || escape_char == 't' || escape_char == 'r') {
-                int char_pc = emit_instruction(regex, OP_CHAR);
-                if (escape_char == 'n') {
-                    regex->code[char_pc].c = '\n';
-                } else if (escape_char == 't') {
-                    regex->code[char_pc].c = '\t';
-                } else if (escape_char == 'r') {
-                    regex->code[char_pc].c = '\r';
-                }
-                pc = regex->code_len;
-                i += 2; // Skip both \ and the escape character
-                continue;
-            }
-            
-            // For other escapes, treat as literal (e.g., \. becomes .)
-            int char_pc = emit_instruction(regex, OP_CHAR);
-            regex->code[char_pc].c = escape_char;
-            pc = regex->code_len;
-            i += 2; // Skip both \ and the escaped character
-            continue;
-        }
-        
-        // Handle character classes [...]
-        if (ch == '[') {
-            // Parse character class
-            int class_start = i + 1;
-            int negate = 0;
-            
-            // Check for negation
-            if (class_start < pattern_len && pattern[class_start] == '^') {
-                negate = 1;
-                class_start++;
-            }
-            
-            int class_end = class_start;
-            
-            // Find the closing ]
-            class_end = class_start;
-            while (class_end < pattern_len && pattern[class_end] != ']') {
-                class_end++;
-            }
-            
-            if (class_end >= pattern_len) {
-                // Malformed character class - treat [ as literal
-                int char_pc = emit_instruction(regex, OP_CHAR);
-                regex->code[char_pc].c = ch;
-                pc = regex->code_len;
-                continue;
-            }
-            
-            // Build character class
-            int charset_pc = emit_instruction(regex, OP_CHARSET);
-            memset(regex->code[charset_pc].charset, 0, sizeof(regex->code[charset_pc].charset));
-            regex->code[charset_pc].negate = negate;
-            
-            // Parse the character class content
-            for (int j = class_start; j < class_end; j++) {
-                // Handle escape sequences within character classes
-                if (pattern[j] == '\\' && j + 1 < class_end) {
-                    char escape_char = pattern[j + 1];
-                    
-                    if (escape_char == 'd') {
-                        // \d matches [0-9]
-                        for (char c = '0'; c <= '9'; c++) {
-                            int bit = (unsigned char)c;
-                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                    } else if (escape_char == 'w') {
-                        // \w matches [a-zA-Z0-9_]
-                        for (char c = 'a'; c <= 'z'; c++) {
-                            int bit = (unsigned char)c;
-                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                        for (char c = 'A'; c <= 'Z'; c++) {
-                            int bit = (unsigned char)c;
-                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                        for (char c = '0'; c <= '9'; c++) {
-                            int bit = (unsigned char)c;
-                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                        int bit = (unsigned char)'_';
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    } else if (escape_char == 's') {
-                        // \s matches [ \t\n\r\f\v]
-                        int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
-                        for (int k = 0; k < 6; k++) {
-                            int bit = (unsigned char)space_chars[k];
-                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                        }
-                    } else if (escape_char == 'n') {
-                        int bit = (unsigned char)'\n';
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    } else if (escape_char == 't') {
-                        int bit = (unsigned char)'\t';
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    } else if (escape_char == 'r') {
-                        int bit = (unsigned char)'\r';
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    } else {
-                        // Treat as literal escaped character
-                        int bit = (unsigned char)escape_char;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    
-                    j++; // Skip the escape character
-                } else if (j + 2 < class_end && pattern[j + 1] == '-') {
-                    // Character range: a-z (but make sure j+2 is not the last char)
-                    char start_char = pattern[j];
-                    char end_char = pattern[j + 2];
-                    for (char c = start_char; c <= end_char; c++) {
-                        int bit = (unsigned char)c;
-                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                    }
-                    j += 2; // Skip the range
-                } else {
-                    // Individual character
-                    char class_char = pattern[j];
-                    int bit = (unsigned char)class_char;
-                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
-                }
-            }
-            
-            pc = regex->code_len;
-            i = class_end; // Skip to after the ]
-            continue;
-        }
-        
-        // Check for quantifiers - but character classes and escapes are already handled above
-        if (i + 1 < pattern_len && (pattern[i + 1] == '*' || pattern[i + 1] == '+' || pattern[i + 1] == '?' || pattern[i + 1] == '{')) {
-            char quantifier = pattern[i + 1];
-            
-            if (quantifier == '*') {
-                // Zero-or-more quantifier: X*
-                int choice_addr = pc;
-                
-                // CHOICE +N (to skip the loop)
-                int choice_pc = emit_instruction(regex, OP_CHOICE);
-                pc = regex->code_len;
-                
-                // SAVE_POINTER
-                emit_instruction(regex, OP_SAVE_POINTER);
-                pc = regex->code_len;
-                
-                // The character/pattern to repeat
-                if (ch == '.') {
-                    emit_instruction(regex, OP_DOT);
-                } else {
-                    int char_pc = emit_instruction(regex, OP_CHAR);
-                    regex->code[char_pc].c = ch;
-                }
-                pc = regex->code_len;
-                
-                // ZERO_LENGTH
-                emit_instruction(regex, OP_ZERO_LENGTH);
-                pc = regex->code_len;
-                
-                // BRANCH_IF_NOT back to choice
-                int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
-                regex->code[branch_pc].addr = choice_addr - branch_pc;
-                pc = regex->code_len;
-                
-                // Patch the CHOICE instruction to jump here
-                regex->code[choice_pc].addr = pc - choice_pc;
-                
-                i++; // Skip the quantifier character
-            } else if (quantifier == '+') {
-                // One-or-more quantifier: X+
-                // First match the character at least once
-                if (ch == '.') {
-                    emit_instruction(regex, OP_DOT);
-                } else {
-                    int char_pc = emit_instruction(regex, OP_CHAR);
-                    regex->code[char_pc].c = ch;
-                }
-                pc = regex->code_len;
-                
-                // Then add X* pattern for additional matches
-                int choice_addr = pc;
-                
-                // CHOICE +N (to skip the loop)
-                int choice_pc = emit_instruction(regex, OP_CHOICE);
-                pc = regex->code_len;
-                
-                // SAVE_POINTER
-                emit_instruction(regex, OP_SAVE_POINTER);
-                pc = regex->code_len;
-                
-                // The character/pattern to repeat
-                if (ch == '.') {
-                    emit_instruction(regex, OP_DOT);
-                } else {
-                    int char_pc = emit_instruction(regex, OP_CHAR);
-                    regex->code[char_pc].c = ch;
-                }
-                pc = regex->code_len;
-                
-                // ZERO_LENGTH
-                emit_instruction(regex, OP_ZERO_LENGTH);
-                pc = regex->code_len;
-                
-                // BRANCH_IF_NOT back to choice
-                int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
-                regex->code[branch_pc].addr = choice_addr - branch_pc;
-                pc = regex->code_len;
-                
-                // Patch the CHOICE instruction to jump here
-                regex->code[choice_pc].addr = pc - choice_pc;
-                
-                i++; // Skip the quantifier character
-            } else if (quantifier == '?') {
-                // Zero-or-one quantifier: X?
-                // CHOICE +N (to skip the optional part)
-                int choice_pc = emit_instruction(regex, OP_CHOICE);
-                pc = regex->code_len;
-                
-                // The optional character/pattern
-                if (ch == '.') {
-                    emit_instruction(regex, OP_DOT);
-                } else {
-                    int char_pc = emit_instruction(regex, OP_CHAR);
-                    regex->code[char_pc].c = ch;
-                }
-                pc = regex->code_len;
-                
-                // Patch the CHOICE instruction to jump here
-                regex->code[choice_pc].addr = pc - choice_pc;
-                
-                i++; // Skip the quantifier character
-            } else if (quantifier == '{') {
-                // Exact quantifiers: {n} or {n,m}
-                int brace_start = i + 1;
-                int brace_end = brace_start + 1;
-                
-                // Find the closing }
-                while (brace_end < pattern_len && pattern[brace_end] != '}') {
-                    brace_end++;
-                }
-                
-                if (brace_end >= pattern_len) {
-                    // Malformed quantifier - treat as literal
-                    int char_pc = emit_instruction(regex, OP_CHAR);
-                    regex->code[char_pc].c = ch;
-                    pc = regex->code_len;
-                    continue;
-                }
-                
-                // Parse the quantifier content
-                int min_count = 0, max_count = 0;
-                int has_comma = 0;
-                
-                // Simple parser for {n} or {n,m}
-                int j = brace_start + 1;
-                while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
-                    min_count = min_count * 10 + (pattern[j] - '0');
-                    j++;
-                }
-                
-                if (j < brace_end && pattern[j] == ',') {
-                    has_comma = 1;
-                    j++;
-                    while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
-                        max_count = max_count * 10 + (pattern[j] - '0');
-                        j++;
-                    }
-                    // For {n,} case, max_count remains 0 - we'll handle this as unlimited later
-                } else {
-                    max_count = min_count; // {n} same as {n,n}
-                }
-                
-                // Generate code for exact repetition
-                // For {n,m}, generate n required matches, then (m-n) optional matches
-                for (int rep = 0; rep < min_count; rep++) {
-                    if (ch == '.') {
-                        emit_instruction(regex, OP_DOT);
-                    } else {
-                        int char_pc = emit_instruction(regex, OP_CHAR);
-                        regex->code[char_pc].c = ch;
-                    }
-                    pc = regex->code_len;
-                }
-                
-                // Handle {n,} case (unlimited) vs {n,m} case (limited)
-                if (has_comma && max_count == 0) {
-                    // {n,} case - unlimited repetition (like X*)
-                    int choice_addr = pc;
-                    
-                    // CHOICE +N (to skip the loop)
-                    int choice_pc_unlim = emit_instruction(regex, OP_CHOICE);
-                    pc = regex->code_len;
-                    
-                    // SAVE_POINTER
-                    emit_instruction(regex, OP_SAVE_POINTER);
-                    pc = regex->code_len;
-                    
-                    // The character/pattern to repeat
-                    if (ch == '.') {
-                        emit_instruction(regex, OP_DOT);
-                    } else {
-                        int char_pc = emit_instruction(regex, OP_CHAR);
-                        regex->code[char_pc].c = ch;
-                    }
-                    pc = regex->code_len;
-                    
-                    // ZERO_LENGTH
-                    emit_instruction(regex, OP_ZERO_LENGTH);
-                    pc = regex->code_len;
-                    
-                    // BRANCH_IF_NOT back to choice
-                    int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
-                    regex->code[branch_pc].addr = choice_addr - branch_pc;
-                    pc = regex->code_len;
-                    
-                    // Patch the CHOICE instruction to jump here
-                    regex->code[choice_pc_unlim].addr = pc - choice_pc_unlim;
-                } else {
-                    // {n,m} case - limited repetition
-                    // Add optional matches for {n,m} where m > n
-                    for (int rep = min_count; rep < max_count; rep++) {
-                        // CHOICE +N (to skip this optional match)
-                        int choice_pc_opt = emit_instruction(regex, OP_CHOICE);
-                        pc = regex->code_len;
-                        
-                        // The optional character/pattern
-                        if (ch == '.') {
-                            emit_instruction(regex, OP_DOT);
-                        } else {
-                            int char_pc = emit_instruction(regex, OP_CHAR);
-                            regex->code[char_pc].c = ch;
-                        }
-                        pc = regex->code_len;
-                        
-                        // Patch the CHOICE instruction
-                        regex->code[choice_pc_opt].addr = pc - choice_pc_opt;
-                    }
-                }
-                
-                i = brace_end; // Skip to the }, main loop will i++ to next char
-            } else {
-                i++; // Skip the quantifier character (*, +, ?), main loop will i++ to next char
-            }
-            continue; // Skip regular character processing since we handled quantifier
-        } else {
-            // Regular character or dot (character classes handled above)
-            if (ch == '.') {
-                emit_instruction(regex, OP_DOT);
-            } else {
-                int char_pc = emit_instruction(regex, OP_CHAR);
-                regex->code[char_pc].c = ch;
-            }
-            pc = regex->code_len;
-        }
-    }
-    
-    // SAVE_GROUP 0 END
-    int save_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
-    regex->code[save_group_pc].group_num = 0;
-    regex->code[save_group_pc].is_end = 1;
-    pc = regex->code_len;
-    
-    // MATCH
-    emit_instruction(regex, OP_MATCH);
-    pc = regex->code_len;
-    
-    regex->code_len = pc;
-    return regex;
+    return compiled;
 }
 
 // VM execution with simplified integer data stack
@@ -795,6 +329,82 @@ static int vm_execute(CompiledRegex *compiled, VM *vm) {
     return 0;
 }
 
+// New function that returns detailed match information
+typedef struct {
+    int matched;
+    int match_start;
+    int match_end;
+    int *group_starts;
+    int *group_ends;
+    int group_count;
+} DetailedMatch;
+
+DetailedMatch execute_regex_detailed(CompiledRegex *compiled, const char *text, int start_pos) {
+    DetailedMatch result = {0};
+    if (!compiled || !text) return result;
+    
+    int text_len = strlen(text);
+    
+    for (int pos = start_pos; pos <= text_len; pos++) {
+        VM vm = {
+            .text = text,
+            .text_len = text_len,
+            .pc = 0,
+            .pos = pos,
+            .data_stack = int_stack_new(),
+            .choice_stack = malloc(64 * sizeof(struct ChoicePoint)),
+            .choice_top = 0,
+            .choice_capacity = 64,
+            .choice_count = 0,
+            .max_choices = 10000,
+            .flags = compiled->flags,
+            .last_match_was_zero_length = 0,
+            .last_operation_success = 0,
+            .group_count = compiled->group_count
+        };
+        
+        // Initialize capture groups
+        vm.group_starts = malloc(compiled->group_count * sizeof(int));
+        vm.group_ends = malloc(compiled->group_count * sizeof(int));
+        for (int i = 0; i < compiled->group_count; i++) {
+            vm.group_starts[i] = -1;
+            vm.group_ends[i] = -1;
+        }
+        
+        int match_result = vm_execute(compiled, &vm);
+        
+        if (match_result) {
+            // Success - copy group data
+            result.matched = 1;
+            result.match_start = pos;
+            result.match_end = vm.group_ends[0];  // Group 0 is the full match
+            result.group_count = compiled->group_count;
+            result.group_starts = malloc(compiled->group_count * sizeof(int));
+            result.group_ends = malloc(compiled->group_count * sizeof(int));
+            memcpy(result.group_starts, vm.group_starts, compiled->group_count * sizeof(int));
+            memcpy(result.group_ends, vm.group_ends, compiled->group_count * sizeof(int));
+        }
+        
+        // Clean up VM
+        int_stack_release(vm.data_stack);
+        for (int i = 0; i < vm.choice_top; i++) {
+            struct ChoicePoint *cp = &vm.choice_stack[i];
+            if (!cp->transferred) {
+                int_stack_release(cp->data_stack);
+            }
+            free(cp->group_starts);
+            free(cp->group_ends);
+        }
+        free(vm.choice_stack);
+        free(vm.group_starts);
+        free(vm.group_ends);
+        
+        if (match_result) return result;
+    }
+    
+    return result;
+}
+
 int execute_regex(CompiledRegex *compiled, const char *text, int start_pos) {
     if (!compiled || !text) return 0;
     
@@ -927,16 +537,31 @@ int regex_test(RegExp *regexp, const char *text) {
 MatchResult* regex_exec(RegExp *regexp, const char *text) {
     if (!regexp || !regexp->compiled || !text) return NULL;
     
-    int result = execute_regex(regexp->compiled, text, 0);
-    if (!result) return NULL;
+    DetailedMatch detailed = execute_regex_detailed(regexp->compiled, text, 0);
+    if (!detailed.matched) return NULL;
     
-    // Create a basic match result - for now just the full match
+    // Create MatchResult with captured groups
     MatchResult *match = malloc(sizeof(MatchResult));
-    match->group_count = 1;
-    match->groups = malloc(sizeof(char*) * 1);
-    match->groups[0] = strdup(text);  // For now, return the full input as match
-    match->index = 0;
+    match->group_count = detailed.group_count;
+    match->groups = malloc(sizeof(char*) * detailed.group_count);
+    match->index = detailed.match_start;
     match->input = strdup(text);
+    
+    // Extract captured group strings from text
+    for (int i = 0; i < detailed.group_count; i++) {
+        if (detailed.group_starts[i] >= 0 && detailed.group_ends[i] >= 0) {
+            int len = detailed.group_ends[i] - detailed.group_starts[i];
+            match->groups[i] = malloc(len + 1);
+            strncpy(match->groups[i], text + detailed.group_starts[i], len);
+            match->groups[i][len] = '\0';
+        } else {
+            match->groups[i] = NULL;  // Group didn't match
+        }
+    }
+    
+    // Clean up detailed match
+    free(detailed.group_starts);
+    free(detailed.group_ends);
     
     return match;
 }
@@ -996,4 +621,635 @@ void match_iterator_free(MatchIterator *iter) {
     if (iter) {
         free(iter);
     }
+}
+
+// AST Implementation
+
+ASTNode* create_ast_node(ASTNodeType type) {
+    ASTNode *node = malloc(sizeof(ASTNode));
+    node->type = type;
+    
+    // Initialize based on type
+    switch (type) {
+        case AST_SEQUENCE:
+            node->data.sequence.children = NULL;
+            node->data.sequence.child_count = 0;
+            node->data.sequence.capacity = 0;
+            break;
+        case AST_GROUP:
+            node->data.group.content = NULL;
+            node->data.group.group_number = 0;
+            break;
+        case AST_QUANTIFIER:
+            node->data.quantifier.target = NULL;
+            node->data.quantifier.quantifier = '\0';
+            node->data.quantifier.min_count = 0;
+            node->data.quantifier.max_count = 0;
+            break;
+        case AST_CHARSET:
+            memset(node->data.charset.charset, 0, 32);
+            node->data.charset.negate = 0;
+            break;
+        default:
+            // Other types don't need initialization
+            break;
+    }
+    
+    return node;
+}
+
+void free_ast(ASTNode *node) {
+    if (!node) return;
+    
+    switch (node->type) {
+        case AST_SEQUENCE:
+            for (int i = 0; i < node->data.sequence.child_count; i++) {
+                free_ast(node->data.sequence.children[i]);
+            }
+            free(node->data.sequence.children);
+            break;
+        case AST_GROUP:
+            free_ast(node->data.group.content);
+            break;
+        case AST_QUANTIFIER:
+            free_ast(node->data.quantifier.target);
+            break;
+        default:
+            // Other types don't have child nodes to free
+            break;
+    }
+    
+    free(node);
+}
+
+// Helper function to add a child to a sequence node
+void add_sequence_child(ASTNode *sequence, ASTNode *child) {
+    if (sequence->type != AST_SEQUENCE) return;
+    
+    // Resize if needed
+    if (sequence->data.sequence.child_count >= sequence->data.sequence.capacity) {
+        int new_capacity = sequence->data.sequence.capacity == 0 ? 4 : sequence->data.sequence.capacity * 2;
+        sequence->data.sequence.children = realloc(sequence->data.sequence.children, 
+                                                  new_capacity * sizeof(ASTNode*));
+        sequence->data.sequence.capacity = new_capacity;
+    }
+    
+    sequence->data.sequence.children[sequence->data.sequence.child_count++] = child;
+}
+
+// Parse a regex pattern into an AST
+ASTNode* parse_pattern(const char *pattern, int *group_counter) {
+    int len = strlen(pattern);
+    if (len == 0) {
+        // Empty pattern - create empty sequence
+        return create_ast_node(AST_SEQUENCE);
+    }
+    
+    ASTNode *sequence = create_ast_node(AST_SEQUENCE);
+    
+    for (int i = 0; i < len; i++) {
+        char ch = pattern[i];
+        ASTNode *node = NULL;
+        
+        // Handle escape sequences
+        if (ch == '\\' && i + 1 < len) {
+            char escaped = pattern[i + 1];
+            
+            if (escaped == 'd') {
+                // Digit character class [0-9]
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 0;
+                for (int d = '0'; d <= '9'; d++) {
+                    int bit = (unsigned char)d;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                i++; // Skip escaped character
+            } else if (escaped == 'w') {
+                // Word character class [a-zA-Z0-9_]
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 0;
+                for (int c = 'a'; c <= 'z'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                for (int c = 'A'; c <= 'Z'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                for (int c = '0'; c <= '9'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                int bit = (unsigned char)'_';
+                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                i++; // Skip escaped character
+            } else if (escaped == 's') {
+                // Whitespace character class
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 0;
+                const char *whitespace = " \t\n\r\f\v";
+                for (int w = 0; whitespace[w]; w++) {
+                    int bit = (unsigned char)whitespace[w];
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                i++; // Skip escaped character
+            } else if (escaped == 'D') {
+                // Non-digit character class [^0-9]
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 1;
+                for (int d = '0'; d <= '9'; d++) {
+                    int bit = (unsigned char)d;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                i++; // Skip escaped character
+            } else if (escaped == 'W') {
+                // Non-word character class [^a-zA-Z0-9_]
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 1;
+                for (int c = 'a'; c <= 'z'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                for (int c = 'A'; c <= 'Z'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                for (int c = '0'; c <= '9'; c++) {
+                    int bit = (unsigned char)c;
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                int bit = (unsigned char)'_';
+                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                i++; // Skip escaped character
+            } else if (escaped == 'S') {
+                // Non-whitespace character class [^ \t\n\r\f\v]
+                node = create_ast_node(AST_CHARSET);
+                node->data.charset.negate = 1;
+                const char *whitespace = " \t\n\r\f\v";
+                for (int w = 0; whitespace[w]; w++) {
+                    int bit = (unsigned char)whitespace[w];
+                    node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                }
+                i++; // Skip escaped character
+            } else if (escaped == 'n') {
+                // Newline
+                node = create_ast_node(AST_CHAR);
+                node->data.character = '\n';
+                i++; // Skip escaped character
+            } else if (escaped == 't') {
+                // Tab
+                node = create_ast_node(AST_CHAR);
+                node->data.character = '\t';
+                i++; // Skip escaped character
+            } else if (escaped == 'r') {
+                // Carriage return
+                node = create_ast_node(AST_CHAR);
+                node->data.character = '\r';
+                i++; // Skip escaped character
+            } else {
+                // Regular escaped character
+                node = create_ast_node(AST_CHAR);
+                node->data.character = escaped;
+                i++; // Skip escaped character
+            }
+        } else if (ch == '(') {
+            // Group start - find matching closing paren
+            int paren_depth = 1;
+            int start = i + 1;
+            int end = i + 1;
+            
+            while (end < len && paren_depth > 0) {
+                if (pattern[end] == '(') {
+                    paren_depth++;
+                } else if (pattern[end] == ')') {
+                    paren_depth--;
+                }
+                end++;
+            }
+            
+            if (paren_depth > 0) {
+                // Unmatched paren - treat as literal
+                node = create_ast_node(AST_CHAR);
+                node->data.character = ch;
+            } else {
+                // Create group node
+                node = create_ast_node(AST_GROUP);
+                (*group_counter)++;
+                node->data.group.group_number = *group_counter;
+                
+                // Parse group content
+                int group_len = end - start - 1;
+                char *group_content = malloc(group_len + 1);
+                strncpy(group_content, pattern + start, group_len);
+                group_content[group_len] = '\0';
+                
+                node->data.group.content = parse_pattern(group_content, group_counter);
+                
+                free(group_content);
+                i = end - 1; // Skip to closing paren (will be incremented by loop)
+            }
+        } else if (ch == '[') {
+            // Character class [abc] or [a-z] or [^abc]
+            int class_start = i + 1;
+            int negate = 0;
+            
+            // Check for negation
+            if (class_start < len && pattern[class_start] == '^') {
+                negate = 1;
+                class_start++;
+            }
+            
+            // Find closing ]
+            int class_end = class_start;
+            while (class_end < len && pattern[class_end] != ']') {
+                class_end++;
+            }
+            
+            if (class_end >= len) {
+                // Malformed character class - treat [ as literal
+                node = create_ast_node(AST_CHAR);
+                node->data.character = ch;
+            } else {
+                // Build character class
+                node = create_ast_node(AST_CHARSET);
+                memset(node->data.charset.charset, 0, 32);
+                node->data.charset.negate = negate;
+                
+                // Parse character class content
+                for (int j = class_start; j < class_end; j++) {
+                    // Handle escape sequences within character classes
+                    if (pattern[j] == '\\' && j + 1 < class_end) {
+                        char escape_char = pattern[j + 1];
+                        
+                        if (escape_char == 'd') {
+                            // \d matches [0-9]
+                            for (char c = '0'; c <= '9'; c++) {
+                                int bit = (unsigned char)c;
+                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            }
+                            j++; // Skip escaped character
+                        } else if (escape_char == 'w') {
+                            // \w matches [a-zA-Z0-9_]
+                            for (char c = 'a'; c <= 'z'; c++) {
+                                int bit = (unsigned char)c;
+                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            }
+                            for (char c = 'A'; c <= 'Z'; c++) {
+                                int bit = (unsigned char)c;
+                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            }
+                            for (char c = '0'; c <= '9'; c++) {
+                                int bit = (unsigned char)c;
+                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            }
+                            int bit = (unsigned char)'_';
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            j++; // Skip escaped character
+                        } else if (escape_char == 's') {
+                            // \s matches [ \t\n\r\f\v]
+                            const char *whitespace = " \t\n\r\f\v";
+                            for (int w = 0; whitespace[w]; w++) {
+                                int bit = (unsigned char)whitespace[w];
+                                node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            }
+                            j++; // Skip escaped character
+                        } else if (escape_char == 'n') {
+                            int bit = (unsigned char)'\n';
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            j++; // Skip escaped character
+                        } else if (escape_char == 't') {
+                            int bit = (unsigned char)'\t';
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            j++; // Skip escaped character
+                        } else if (escape_char == 'r') {
+                            int bit = (unsigned char)'\r';
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            j++; // Skip escaped character
+                        } else {
+                            // Treat as literal escaped character
+                            int bit = (unsigned char)escape_char;
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                            j++; // Skip escaped character
+                        }
+                    } else if (j + 2 < class_end && pattern[j + 1] == '-') {
+                        // Character range: a-z
+                        char start_char = pattern[j];
+                        char end_char = pattern[j + 2];
+                        for (char c = start_char; c <= end_char; c++) {
+                            int bit = (unsigned char)c;
+                            node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                        j += 2; // Skip the range
+                    } else {
+                        // Individual character
+                        char class_char = pattern[j];
+                        int bit = (unsigned char)class_char;
+                        node->data.charset.charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                }
+                
+                i = class_end; // Skip to closing ] (will be incremented by loop)
+            }
+        } else if (ch == '.') {
+            node = create_ast_node(AST_DOT);
+        } else if (ch == '^') {
+            node = create_ast_node(AST_ANCHOR_START);
+        } else if (ch == '$') {
+            node = create_ast_node(AST_ANCHOR_END);
+        } else {
+            // Regular character
+            node = create_ast_node(AST_CHAR);
+            node->data.character = ch;
+        }
+        
+        if (node) {
+            // Check for quantifiers
+            if (i + 1 < len && (pattern[i + 1] == '*' || pattern[i + 1] == '+' || pattern[i + 1] == '?' || pattern[i + 1] == '{')) {
+                char quantifier = pattern[i + 1];
+                ASTNode *quantifier_node = create_ast_node(AST_QUANTIFIER);
+                quantifier_node->data.quantifier.target = node;
+                quantifier_node->data.quantifier.quantifier = quantifier;
+                
+                if (quantifier == '{') {
+                    // Parse {n} or {n,m} quantifier
+                    int brace_start = i + 2;
+                    int brace_end = brace_start;
+                    
+                    // Find closing }
+                    while (brace_end < len && pattern[brace_end] != '}') {
+                        brace_end++;
+                    }
+                    
+                    if (brace_end >= len) {
+                        // Malformed quantifier - treat as literal
+                        free_ast(quantifier_node);
+                        node = create_ast_node(AST_CHAR);
+                        node->data.character = pattern[i + 1];
+                    } else {
+                        // Parse the content between braces
+                        int min_count = 0, max_count = 0;
+                        int has_comma = 0;
+                        
+                        // Parse numbers
+                        int j = brace_start;
+                        while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
+                            min_count = min_count * 10 + (pattern[j] - '0');
+                            j++;
+                        }
+                        
+                        if (j < brace_end && pattern[j] == ',') {
+                            has_comma = 1;
+                            j++;
+                            while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
+                                max_count = max_count * 10 + (pattern[j] - '0');
+                                j++;
+                            }
+                        } else {
+                            max_count = min_count; // {n} same as {n,n}
+                        }
+                        
+                        quantifier_node->data.quantifier.min_count = min_count;
+                        quantifier_node->data.quantifier.max_count = has_comma && max_count == 0 ? -1 : max_count; // -1 for {n,}
+                        
+                        i = brace_end; // Skip to closing }
+                    }
+                } else {
+                    // Simple quantifiers *, +, ?
+                    quantifier_node->data.quantifier.min_count = 0;
+                    quantifier_node->data.quantifier.max_count = 0;
+                    i++; // Skip quantifier
+                }
+                
+                node = quantifier_node;
+            }
+            
+            add_sequence_child(sequence, node);
+        }
+    }
+    
+    return sequence;
+}
+
+// Helper function to count the maximum group number in an AST
+int count_groups(ASTNode *node) {
+    if (!node) return 0;
+    
+    int max_group = 0;
+    
+    switch (node->type) {
+        case AST_GROUP:
+            max_group = node->data.group.group_number;
+            int child_max = count_groups(node->data.group.content);
+            if (child_max > max_group) max_group = child_max;
+            break;
+            
+        case AST_SEQUENCE:
+            for (int i = 0; i < node->data.sequence.child_count; i++) {
+                int child_max = count_groups(node->data.sequence.children[i]);
+                if (child_max > max_group) max_group = child_max;
+            }
+            break;
+            
+        case AST_QUANTIFIER:
+            max_group = count_groups(node->data.quantifier.target);
+            break;
+            
+        default:
+            // Other node types don't contain groups
+            break;
+    }
+    
+    return max_group;
+}
+
+// Helper function to ensure capacity in CompiledRegex during AST compilation
+void ensure_ast_capacity(CompiledRegex *regex, int additional) {
+    while (regex->code_len + additional >= regex->code_capacity) {
+        regex->code_capacity *= 2;
+        regex->code = realloc(regex->code, regex->code_capacity * sizeof(Instruction));
+    }
+}
+
+// Helper function to emit instruction during AST compilation
+int emit_ast_instruction(CompiledRegex *regex, OpCode op) {
+    ensure_ast_capacity(regex, 1);
+    regex->code[regex->code_len].op = op;
+    return regex->code_len++;
+}
+
+// Compile an AST node to bytecode
+void compile_ast_node(ASTNode *node, CompiledRegex *regex) {
+    if (!node) return;
+    
+    switch (node->type) {
+        case AST_CHAR: {
+            int pc = emit_ast_instruction(regex, OP_CHAR);
+            regex->code[pc].c = node->data.character;
+            break;
+        }
+        
+        case AST_DOT: {
+            emit_ast_instruction(regex, OP_DOT);
+            break;
+        }
+        
+        case AST_CHARSET: {
+            int pc = emit_ast_instruction(regex, OP_CHARSET);
+            memcpy(regex->code[pc].charset, node->data.charset.charset, 32);
+            regex->code[pc].negate = node->data.charset.negate;
+            break;
+        }
+        
+        case AST_SEQUENCE: {
+            for (int i = 0; i < node->data.sequence.child_count; i++) {
+                compile_ast_node(node->data.sequence.children[i], regex);
+            }
+            break;
+        }
+        
+        case AST_GROUP: {
+            // Emit SAVE_GROUP start
+            int start_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+            regex->code[start_pc].group_num = node->data.group.group_number;
+            regex->code[start_pc].is_end = 0;
+            
+            // Compile group content
+            compile_ast_node(node->data.group.content, regex);
+            
+            // Emit SAVE_GROUP end
+            int end_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+            regex->code[end_pc].group_num = node->data.group.group_number;
+            regex->code[end_pc].is_end = 1;
+            break;
+        }
+        
+        case AST_QUANTIFIER: {
+            char quantifier = node->data.quantifier.quantifier;
+            
+            if (quantifier == '*') {
+                // Zero-or-more: CHOICE +N, SAVE_POINTER, [pattern], ZERO_LENGTH, BRANCH_IF_NOT -N
+                int choice_addr = regex->code_len;
+                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                
+                emit_ast_instruction(regex, OP_SAVE_POINTER);
+                
+                // Compile the target pattern
+                compile_ast_node(node->data.quantifier.target, regex);
+                
+                emit_ast_instruction(regex, OP_ZERO_LENGTH);
+                
+                int branch_pc = emit_ast_instruction(regex, OP_BRANCH_IF_NOT);
+                regex->code[branch_pc].addr = choice_addr - branch_pc;
+                
+                // Update CHOICE to skip to here
+                regex->code[choice_addr].addr = regex->code_len - choice_addr;
+                
+            } else if (quantifier == '+') {
+                // One-or-more: [pattern], CHOICE -N
+                int loop_start = regex->code_len;
+                
+                // Compile the target pattern
+                compile_ast_node(node->data.quantifier.target, regex);
+                
+                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                regex->code[choice_pc].addr = loop_start - choice_pc;
+                
+            } else if (quantifier == '?') {
+                // Zero-or-one: CHOICE +N, [pattern]
+                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                
+                // Compile the target pattern
+                compile_ast_node(node->data.quantifier.target, regex);
+                
+                // Update CHOICE to skip to here
+                regex->code[choice_pc].addr = regex->code_len - choice_pc;
+                
+            } else if (quantifier == '{') {
+                // Exact quantifiers: {n}, {n,m}, {n,}
+                int min_count = node->data.quantifier.min_count;
+                int max_count = node->data.quantifier.max_count;
+                
+                // Generate required matches (min_count times)
+                for (int rep = 0; rep < min_count; rep++) {
+                    compile_ast_node(node->data.quantifier.target, regex);
+                }
+                
+                // Handle additional optional matches
+                if (max_count == -1) {
+                    // {n,} case - unlimited additional matches (like *)
+                    int choice_addr = regex->code_len;
+                    int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                    
+                    emit_ast_instruction(regex, OP_SAVE_POINTER);
+                    
+                    // The pattern to repeat
+                    compile_ast_node(node->data.quantifier.target, regex);
+                    
+                    emit_ast_instruction(regex, OP_ZERO_LENGTH);
+                    
+                    int branch_pc = emit_ast_instruction(regex, OP_BRANCH_IF_NOT);
+                    regex->code[branch_pc].addr = choice_addr - branch_pc;
+                    
+                    // Update CHOICE to skip to here
+                    regex->code[choice_addr].addr = regex->code_len - choice_addr;
+                    
+                } else if (max_count > min_count) {
+                    // {n,m} case - limited additional matches
+                    for (int rep = min_count; rep < max_count; rep++) {
+                        // CHOICE +N (to skip this optional match)
+                        int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                        
+                        // The optional pattern
+                        compile_ast_node(node->data.quantifier.target, regex);
+                        
+                        // Update CHOICE to skip to here
+                        regex->code[choice_pc].addr = regex->code_len - choice_pc;
+                    }
+                }
+            }
+            break;
+        }
+        
+        case AST_ANCHOR_START: {
+            emit_ast_instruction(regex, OP_ANCHOR_START);
+            break;
+        }
+        
+        case AST_ANCHOR_END: {
+            emit_ast_instruction(regex, OP_ANCHOR_END);
+            break;
+        }
+    }
+}
+
+// Compile an AST to bytecode
+CompiledRegex* compile_ast(ASTNode *ast, int flags) {
+    CompiledRegex *regex = malloc(sizeof(CompiledRegex));
+    regex->code = malloc(sizeof(Instruction) * 16);
+    regex->code_len = 0;
+    regex->code_capacity = 16;
+    regex->group_count = 0;
+    regex->flags = flags;
+    
+    // Emit SAVE_GROUP for group 0 (full match) start
+    int start_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+    regex->code[start_pc].group_num = 0;
+    regex->code[start_pc].is_end = 0;
+    
+    // Compile the AST
+    compile_ast_node(ast, regex);
+    
+    // Count groups by traversing the AST
+    int max_group = count_groups(ast);
+    regex->group_count = max_group + 1; // +1 for group 0
+    
+    // Emit SAVE_GROUP for group 0 end
+    int end_pc = emit_ast_instruction(regex, OP_SAVE_GROUP);
+    regex->code[end_pc].group_num = 0;
+    regex->code[end_pc].is_end = 1;
+    
+    // Emit MATCH instruction
+    emit_ast_instruction(regex, OP_MATCH);
+    
+    return regex;
 }

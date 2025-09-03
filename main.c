@@ -550,7 +550,7 @@ int main(void) {
     // RUN_TEST(test_basic_groups);
     // RUN_TEST(test_multiple_groups);
     // RUN_TEST(test_nested_groups);
-    //
+
     // // Alternation
     // RUN_TEST(test_alternation);
     // RUN_TEST(test_alternation_with_groups);

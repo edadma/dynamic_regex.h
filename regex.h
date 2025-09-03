@@ -4,6 +4,44 @@
 #include "int_stack.h"
 #include <stdint.h>
 
+// AST Node Types for parsing
+typedef enum {
+    AST_CHAR,           // Single character
+    AST_DOT,            // . (any character)
+    AST_CHARSET,        // [abc] or \d, \w, \s
+    AST_GROUP,          // (pattern)
+    AST_SEQUENCE,       // pattern1 pattern2
+    AST_QUANTIFIER,     // pattern*, pattern+, pattern?
+    AST_ANCHOR_START,   // ^
+    AST_ANCHOR_END      // $
+} ASTNodeType;
+
+typedef struct ASTNode {
+    ASTNodeType type;
+    union {
+        char character;             // For AST_CHAR
+        struct {                    // For AST_CHARSET
+            uint8_t charset[32];    // 256-bit bitmap
+            int negate;             // 1 if negated [^abc]
+        } charset;
+        struct {                    // For AST_GROUP
+            struct ASTNode *content;
+            int group_number;
+        } group;
+        struct {                    // For AST_SEQUENCE
+            struct ASTNode **children;
+            int child_count;
+            int capacity;
+        } sequence;
+        struct {                    // For AST_QUANTIFIER
+            struct ASTNode *target;
+            char quantifier;        // '*', '+', '?', '{'
+            int min_count;          // For {n} and {n,m}
+            int max_count;          // For {n,m}, -1 for unlimited
+        } quantifier;
+    } data;
+} ASTNode;
+
 // VM Instructions - same as v2 but simplified data stack
 typedef enum {
     OP_CHAR,              // Match specific character
@@ -123,5 +161,11 @@ MatchResult* string_match(const char *text, RegExp *regexp);
 MatchIterator* string_match_all(const char *text, RegExp *regexp);
 MatchResult* match_iterator_next(MatchIterator *iter);
 void match_iterator_free(MatchIterator *iter);
+
+// AST parsing functions
+ASTNode* parse_pattern(const char *pattern, int *group_counter);
+ASTNode* create_ast_node(ASTNodeType type);
+void free_ast(ASTNode *node);
+CompiledRegex* compile_ast(ASTNode *ast, int flags);
 
 #endif // REGEX_H
