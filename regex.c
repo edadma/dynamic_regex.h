@@ -55,6 +55,21 @@ static void emit_jump(Compiler *c, OpCode op, int addr) {
     c->code[c->code_len - 1].addr = addr;
 }
 
+// Helper function to ensure bytecode buffer capacity
+static void ensure_capacity(CompiledRegex *regex, int needed) {
+    while (regex->code_len + needed >= regex->code_capacity) {
+        regex->code_capacity *= 2;
+        regex->code = realloc(regex->code, regex->code_capacity * sizeof(Instruction));
+    }
+}
+
+// Helper function to safely add an instruction
+static int emit_instruction(CompiledRegex *regex, OpCode op) {
+    ensure_capacity(regex, 1);
+    regex->code[regex->code_len].op = op;
+    return regex->code_len++;
+}
+
 // Enhanced compilation to handle basic patterns
 CompiledRegex* compile_regex(const char *pattern, int flags) {
     CompiledRegex *regex = malloc(sizeof(CompiledRegex));
@@ -66,16 +81,16 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
     
     // Handle empty pattern - matches everything
     if (!pattern || strlen(pattern) == 0) {
-        regex->code[0].op = OP_SAVE_GROUP;
-        regex->code[0].group_num = 0;
-        regex->code[0].is_end = 0;
+        int start_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
+        regex->code[start_group_pc].group_num = 0;
+        regex->code[start_group_pc].is_end = 0;
         
-        regex->code[1].op = OP_SAVE_GROUP;
-        regex->code[1].group_num = 0;
-        regex->code[1].is_end = 1;
+        int end_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
+        regex->code[end_group_pc].group_num = 0;
+        regex->code[end_group_pc].is_end = 1;
         
-        regex->code[2].op = OP_MATCH;
-        regex->code_len = 3;
+        emit_instruction(regex, OP_MATCH);
+        regex->code_len = regex->code_len;
         return regex;
     }
     
@@ -84,10 +99,10 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
     int pc = 0;
     
     // SAVE_GROUP 0 START
-    regex->code[pc].op = OP_SAVE_GROUP;
-    regex->code[pc].group_num = 0;
-    regex->code[pc].is_end = 0;
-    pc++;
+    int start_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
+    regex->code[start_group_pc].group_num = 0;
+    regex->code[start_group_pc].is_end = 0;
+    pc = regex->code_len;
     
     // Compile each character in the pattern
     int pattern_len = strlen(pattern);
@@ -96,13 +111,13 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
         
         // Handle anchors
         if (ch == '^') {
-            regex->code[pc].op = OP_ANCHOR_START;
-            pc++;
+            emit_instruction(regex, OP_ANCHOR_START);
+            pc = regex->code_len;
             continue;
         }
         if (ch == '$') {
-            regex->code[pc].op = OP_ANCHOR_END;
-            pc++;
+            emit_instruction(regex, OP_ANCHOR_END);
+            pc = regex->code_len;
             continue;
         }
         
@@ -115,99 +130,99 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
                 escape_char == 'w' || escape_char == 'W' ||
                 escape_char == 's' || escape_char == 'S') {
                 
-                regex->code[pc].op = OP_CHARSET;
-                memset(regex->code[pc].charset, 0, sizeof(regex->code[pc].charset));
+                int charset_pc = emit_instruction(regex, OP_CHARSET);
+                memset(regex->code[charset_pc].charset, 0, sizeof(regex->code[charset_pc].charset));
                 
                 if (escape_char == 'd') {
                     // \d matches [0-9]
-                    regex->code[pc].negate = 0;
+                    regex->code[charset_pc].negate = 0;
                     for (char c = '0'; c <= '9'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                 } else if (escape_char == 'D') {
                     // \D matches [^0-9]
-                    regex->code[pc].negate = 1;
+                    regex->code[charset_pc].negate = 1;
                     for (char c = '0'; c <= '9'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                 } else if (escape_char == 'w') {
                     // \w matches [a-zA-Z0-9_]
-                    regex->code[pc].negate = 0;
+                    regex->code[charset_pc].negate = 0;
                     for (char c = 'a'; c <= 'z'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     for (char c = 'A'; c <= 'Z'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     for (char c = '0'; c <= '9'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     int bit = (unsigned char)'_';
-                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                 } else if (escape_char == 'W') {
                     // \W matches [^a-zA-Z0-9_]
-                    regex->code[pc].negate = 1;
+                    regex->code[charset_pc].negate = 1;
                     for (char c = 'a'; c <= 'z'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     for (char c = 'A'; c <= 'Z'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     for (char c = '0'; c <= '9'; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     int bit = (unsigned char)'_';
-                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                 } else if (escape_char == 's') {
                     // \s matches [ \t\n\r\f\v]
-                    regex->code[pc].negate = 0;
+                    regex->code[charset_pc].negate = 0;
                     int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
                     for (int j = 0; j < 6; j++) {
                         int bit = (unsigned char)space_chars[j];
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                 } else if (escape_char == 'S') {
                     // \S matches [^ \t\n\r\f\v]
-                    regex->code[pc].negate = 1;
+                    regex->code[charset_pc].negate = 1;
                     int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
                     for (int j = 0; j < 6; j++) {
                         int bit = (unsigned char)space_chars[j];
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                 }
                 
-                pc++;
+                pc = regex->code_len;
                 i += 2; // Skip both \ and the escape character
                 continue;
             }
             
             // Handle literal escapes
             if (escape_char == 'n' || escape_char == 't' || escape_char == 'r') {
-                regex->code[pc].op = OP_CHAR;
+                int char_pc = emit_instruction(regex, OP_CHAR);
                 if (escape_char == 'n') {
-                    regex->code[pc].c = '\n';
+                    regex->code[char_pc].c = '\n';
                 } else if (escape_char == 't') {
-                    regex->code[pc].c = '\t';
+                    regex->code[char_pc].c = '\t';
                 } else if (escape_char == 'r') {
-                    regex->code[pc].c = '\r';
+                    regex->code[char_pc].c = '\r';
                 }
-                pc++;
+                pc = regex->code_len;
                 i += 2; // Skip both \ and the escape character
                 continue;
             }
             
             // For other escapes, treat as literal (e.g., \. becomes .)
-            regex->code[pc].op = OP_CHAR;
-            regex->code[pc].c = escape_char;
-            pc++;
+            int char_pc = emit_instruction(regex, OP_CHAR);
+            regex->code[char_pc].c = escape_char;
+            pc = regex->code_len;
             i += 2; // Skip both \ and the escaped character
             continue;
         }
@@ -234,16 +249,16 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             
             if (class_end >= pattern_len) {
                 // Malformed character class - treat [ as literal
-                regex->code[pc].op = OP_CHAR;
-                regex->code[pc].c = ch;
-                pc++;
+                int char_pc = emit_instruction(regex, OP_CHAR);
+                regex->code[char_pc].c = ch;
+                pc = regex->code_len;
                 continue;
             }
             
             // Build character class
-            regex->code[pc].op = OP_CHARSET;
-            memset(regex->code[pc].charset, 0, sizeof(regex->code[pc].charset));
-            regex->code[pc].negate = negate;
+            int charset_pc = emit_instruction(regex, OP_CHARSET);
+            memset(regex->code[charset_pc].charset, 0, sizeof(regex->code[charset_pc].charset));
+            regex->code[charset_pc].negate = negate;
             
             // Parse the character class content
             for (int j = class_start; j < class_end; j++) {
@@ -255,44 +270,44 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
                         // \d matches [0-9]
                         for (char c = '0'; c <= '9'; c++) {
                             int bit = (unsigned char)c;
-                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                         }
                     } else if (escape_char == 'w') {
                         // \w matches [a-zA-Z0-9_]
                         for (char c = 'a'; c <= 'z'; c++) {
                             int bit = (unsigned char)c;
-                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                         }
                         for (char c = 'A'; c <= 'Z'; c++) {
                             int bit = (unsigned char)c;
-                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                         }
                         for (char c = '0'; c <= '9'; c++) {
                             int bit = (unsigned char)c;
-                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                         }
                         int bit = (unsigned char)'_';
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     } else if (escape_char == 's') {
                         // \s matches [ \t\n\r\f\v]
                         int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
                         for (int k = 0; k < 6; k++) {
                             int bit = (unsigned char)space_chars[k];
-                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                            regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                         }
                     } else if (escape_char == 'n') {
                         int bit = (unsigned char)'\n';
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     } else if (escape_char == 't') {
                         int bit = (unsigned char)'\t';
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     } else if (escape_char == 'r') {
                         int bit = (unsigned char)'\r';
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     } else {
                         // Treat as literal escaped character
                         int bit = (unsigned char)escape_char;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     
                     j++; // Skip the escape character
@@ -302,79 +317,257 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
                     char end_char = pattern[j + 2];
                     for (char c = start_char; c <= end_char; c++) {
                         int bit = (unsigned char)c;
-                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                     }
                     j += 2; // Skip the range
                 } else {
                     // Individual character
                     char class_char = pattern[j];
                     int bit = (unsigned char)class_char;
-                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    regex->code[charset_pc].charset[bit / 8] |= (1 << (bit % 8));
                 }
             }
             
-            pc++;
+            pc = regex->code_len;
             i = class_end; // Skip to after the ]
             continue;
         }
         
         // Check for quantifiers - but character classes and escapes are already handled above
-        if (i + 1 < pattern_len && pattern[i + 1] == '*') {
-            // Zero-or-more quantifier: X*
-            int choice_addr = pc;
+        if (i + 1 < pattern_len && (pattern[i + 1] == '*' || pattern[i + 1] == '+' || pattern[i + 1] == '?' || pattern[i + 1] == '{')) {
+            char quantifier = pattern[i + 1];
             
-            // CHOICE +N (to skip the loop)
-            regex->code[pc].op = OP_CHOICE;
-            pc++;
-            int choice_pc = pc - 1;  // Remember location to patch
-            
-            // SAVE_POINTER
-            regex->code[pc].op = OP_SAVE_POINTER;
-            pc++;
-            
-            // The character/pattern to repeat
-            if (ch == '.') {
-                regex->code[pc].op = OP_DOT;
+            if (quantifier == '*') {
+                // Zero-or-more quantifier: X*
+                int choice_addr = pc;
+                
+                // CHOICE +N (to skip the loop)
+                int choice_pc = emit_instruction(regex, OP_CHOICE);
+                pc = regex->code_len;
+                
+                // SAVE_POINTER
+                emit_instruction(regex, OP_SAVE_POINTER);
+                pc = regex->code_len;
+                
+                // The character/pattern to repeat
+                if (ch == '.') {
+                    emit_instruction(regex, OP_DOT);
+                } else {
+                    int char_pc = emit_instruction(regex, OP_CHAR);
+                    regex->code[char_pc].c = ch;
+                }
+                pc = regex->code_len;
+                
+                // ZERO_LENGTH
+                emit_instruction(regex, OP_ZERO_LENGTH);
+                pc = regex->code_len;
+                
+                // BRANCH_IF_NOT back to choice
+                int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
+                regex->code[branch_pc].addr = choice_addr - branch_pc;
+                pc = regex->code_len;
+                
+                // Patch the CHOICE instruction to jump here
+                regex->code[choice_pc].addr = pc - choice_pc;
+                
+                i++; // Skip the quantifier character
+            } else if (quantifier == '+') {
+                // One-or-more quantifier: X+
+                // First match the character at least once
+                if (ch == '.') {
+                    emit_instruction(regex, OP_DOT);
+                } else {
+                    int char_pc = emit_instruction(regex, OP_CHAR);
+                    regex->code[char_pc].c = ch;
+                }
+                pc = regex->code_len;
+                
+                // Then add X* pattern for additional matches
+                int choice_addr = pc;
+                
+                // CHOICE +N (to skip the loop)
+                int choice_pc = emit_instruction(regex, OP_CHOICE);
+                pc = regex->code_len;
+                
+                // SAVE_POINTER
+                emit_instruction(regex, OP_SAVE_POINTER);
+                pc = regex->code_len;
+                
+                // The character/pattern to repeat
+                if (ch == '.') {
+                    emit_instruction(regex, OP_DOT);
+                } else {
+                    int char_pc = emit_instruction(regex, OP_CHAR);
+                    regex->code[char_pc].c = ch;
+                }
+                pc = regex->code_len;
+                
+                // ZERO_LENGTH
+                emit_instruction(regex, OP_ZERO_LENGTH);
+                pc = regex->code_len;
+                
+                // BRANCH_IF_NOT back to choice
+                int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
+                regex->code[branch_pc].addr = choice_addr - branch_pc;
+                pc = regex->code_len;
+                
+                // Patch the CHOICE instruction to jump here
+                regex->code[choice_pc].addr = pc - choice_pc;
+                
+                i++; // Skip the quantifier character
+            } else if (quantifier == '?') {
+                // Zero-or-one quantifier: X?
+                // CHOICE +N (to skip the optional part)
+                int choice_pc = emit_instruction(regex, OP_CHOICE);
+                pc = regex->code_len;
+                
+                // The optional character/pattern
+                if (ch == '.') {
+                    emit_instruction(regex, OP_DOT);
+                } else {
+                    int char_pc = emit_instruction(regex, OP_CHAR);
+                    regex->code[char_pc].c = ch;
+                }
+                pc = regex->code_len;
+                
+                // Patch the CHOICE instruction to jump here
+                regex->code[choice_pc].addr = pc - choice_pc;
+                
+                i++; // Skip the quantifier character
+            } else if (quantifier == '{') {
+                // Exact quantifiers: {n} or {n,m}
+                int brace_start = i + 1;
+                int brace_end = brace_start + 1;
+                
+                // Find the closing }
+                while (brace_end < pattern_len && pattern[brace_end] != '}') {
+                    brace_end++;
+                }
+                
+                if (brace_end >= pattern_len) {
+                    // Malformed quantifier - treat as literal
+                    int char_pc = emit_instruction(regex, OP_CHAR);
+                    regex->code[char_pc].c = ch;
+                    pc = regex->code_len;
+                    continue;
+                }
+                
+                // Parse the quantifier content
+                int min_count = 0, max_count = 0;
+                int has_comma = 0;
+                
+                // Simple parser for {n} or {n,m}
+                int j = brace_start + 1;
+                while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
+                    min_count = min_count * 10 + (pattern[j] - '0');
+                    j++;
+                }
+                
+                if (j < brace_end && pattern[j] == ',') {
+                    has_comma = 1;
+                    j++;
+                    while (j < brace_end && pattern[j] >= '0' && pattern[j] <= '9') {
+                        max_count = max_count * 10 + (pattern[j] - '0');
+                        j++;
+                    }
+                    // For {n,} case, max_count remains 0 - we'll handle this as unlimited later
+                } else {
+                    max_count = min_count; // {n} same as {n,n}
+                }
+                
+                // Generate code for exact repetition
+                // For {n,m}, generate n required matches, then (m-n) optional matches
+                for (int rep = 0; rep < min_count; rep++) {
+                    if (ch == '.') {
+                        emit_instruction(regex, OP_DOT);
+                    } else {
+                        int char_pc = emit_instruction(regex, OP_CHAR);
+                        regex->code[char_pc].c = ch;
+                    }
+                    pc = regex->code_len;
+                }
+                
+                // Handle {n,} case (unlimited) vs {n,m} case (limited)
+                if (has_comma && max_count == 0) {
+                    // {n,} case - unlimited repetition (like X*)
+                    int choice_addr = pc;
+                    
+                    // CHOICE +N (to skip the loop)
+                    int choice_pc_unlim = emit_instruction(regex, OP_CHOICE);
+                    pc = regex->code_len;
+                    
+                    // SAVE_POINTER
+                    emit_instruction(regex, OP_SAVE_POINTER);
+                    pc = regex->code_len;
+                    
+                    // The character/pattern to repeat
+                    if (ch == '.') {
+                        emit_instruction(regex, OP_DOT);
+                    } else {
+                        int char_pc = emit_instruction(regex, OP_CHAR);
+                        regex->code[char_pc].c = ch;
+                    }
+                    pc = regex->code_len;
+                    
+                    // ZERO_LENGTH
+                    emit_instruction(regex, OP_ZERO_LENGTH);
+                    pc = regex->code_len;
+                    
+                    // BRANCH_IF_NOT back to choice
+                    int branch_pc = emit_instruction(regex, OP_BRANCH_IF_NOT);
+                    regex->code[branch_pc].addr = choice_addr - branch_pc;
+                    pc = regex->code_len;
+                    
+                    // Patch the CHOICE instruction to jump here
+                    regex->code[choice_pc_unlim].addr = pc - choice_pc_unlim;
+                } else {
+                    // {n,m} case - limited repetition
+                    // Add optional matches for {n,m} where m > n
+                    for (int rep = min_count; rep < max_count; rep++) {
+                        // CHOICE +N (to skip this optional match)
+                        int choice_pc_opt = emit_instruction(regex, OP_CHOICE);
+                        pc = regex->code_len;
+                        
+                        // The optional character/pattern
+                        if (ch == '.') {
+                            emit_instruction(regex, OP_DOT);
+                        } else {
+                            int char_pc = emit_instruction(regex, OP_CHAR);
+                            regex->code[char_pc].c = ch;
+                        }
+                        pc = regex->code_len;
+                        
+                        // Patch the CHOICE instruction
+                        regex->code[choice_pc_opt].addr = pc - choice_pc_opt;
+                    }
+                }
+                
+                i = brace_end; // Skip to the }, main loop will i++ to next char
             } else {
-                regex->code[pc].op = OP_CHAR;
-                regex->code[pc].c = ch;
+                i++; // Skip the quantifier character (*, +, ?), main loop will i++ to next char
             }
-            pc++;
-            
-            // ZERO_LENGTH
-            regex->code[pc].op = OP_ZERO_LENGTH;
-            pc++;
-            
-            // BRANCH_IF_NOT back to choice
-            regex->code[pc].op = OP_BRANCH_IF_NOT;
-            regex->code[pc].addr = choice_addr - pc;
-            pc++;
-            
-            // Patch the CHOICE instruction to jump here
-            regex->code[choice_pc].addr = pc - choice_pc;
-            
-            i++; // Skip the '*' character
+            continue; // Skip regular character processing since we handled quantifier
         } else {
             // Regular character or dot (character classes handled above)
             if (ch == '.') {
-                regex->code[pc].op = OP_DOT;
+                emit_instruction(regex, OP_DOT);
             } else {
-                regex->code[pc].op = OP_CHAR;
-                regex->code[pc].c = ch;
+                int char_pc = emit_instruction(regex, OP_CHAR);
+                regex->code[char_pc].c = ch;
             }
-            pc++;
+            pc = regex->code_len;
         }
     }
     
     // SAVE_GROUP 0 END
-    regex->code[pc].op = OP_SAVE_GROUP;
-    regex->code[pc].group_num = 0;
-    regex->code[pc].is_end = 1;
-    pc++;
+    int save_group_pc = emit_instruction(regex, OP_SAVE_GROUP);
+    regex->code[save_group_pc].group_num = 0;
+    regex->code[save_group_pc].is_end = 1;
+    pc = regex->code_len;
     
     // MATCH
-    regex->code[pc].op = OP_MATCH;
-    pc++;
+    emit_instruction(regex, OP_MATCH);
+    pc = regex->code_len;
     
     regex->code_len = pc;
     return regex;

@@ -540,12 +540,12 @@ int main(void) {
     RUN_TEST(test_space_escape);
     RUN_TEST(test_literal_escapes);
 
-    // // Quantifiers
-    // RUN_TEST(test_star_quantifier);
-    // RUN_TEST(test_plus_quantifier);
-    // RUN_TEST(test_question_quantifier);
-    // RUN_TEST(test_exact_quantifiers);
-    //
+    // Quantifiers
+    RUN_TEST(test_star_quantifier);
+    RUN_TEST(test_plus_quantifier);
+    RUN_TEST(test_question_quantifier);
+    RUN_TEST(test_exact_quantifiers);
+
     // // Groups and capturing
     // RUN_TEST(test_basic_groups);
     // RUN_TEST(test_multiple_groups);
