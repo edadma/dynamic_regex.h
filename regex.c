@@ -28,6 +28,10 @@ typedef struct {
     BacktrackFrame *stack;
     int stack_top;
     int stack_capacity;
+    
+    // Backtracking limit to prevent exponential behavior
+    int backtrack_count;
+    int max_backtracks;
 } VMState;
 
 // Parser for building bytecode
@@ -502,6 +506,12 @@ static void push_backtrack(VMState *state, int pc, int text_pos) {
 static int pop_backtrack(VMState *state) {
     if (state->stack_top <= 0) return 0;
     
+    // Check backtracking limit to prevent exponential behavior
+    state->backtrack_count++;
+    if (state->backtrack_count > state->max_backtracks) {
+        return 0; // Give up to prevent hang
+    }
+    
     BacktrackFrame *frame = &state->stack[--state->stack_top];
     state->pc = frame->pc;
     state->text_pos = frame->text_pos;
@@ -663,7 +673,9 @@ MatchResult* regex_execute(CompiledRegex *regex, const char *text, int start_pos
             .flags = regex->flags,
             .stack = malloc(64 * sizeof(BacktrackFrame)),
             .stack_top = 0,
-            .stack_capacity = 64
+            .stack_capacity = 64,
+            .backtrack_count = 0,
+            .max_backtracks = 10000  // Reasonable limit to prevent hangs
         };
         
         // Initialize group positions
