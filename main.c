@@ -551,10 +551,10 @@ int main(void) {
     RUN_TEST(test_multiple_groups);
     RUN_TEST(test_nested_groups);
 
-    // // Alternation
-    // RUN_TEST(test_alternation);
-    // RUN_TEST(test_alternation_with_groups);
-    //
+    // Alternation
+    RUN_TEST(test_alternation);
+    RUN_TEST(test_alternation_with_groups);
+
     // // Flags
     // RUN_TEST(test_case_insensitive_flag);
     // RUN_TEST(test_global_flag_with_exec);

@@ -12,6 +12,7 @@ typedef enum {
     AST_GROUP,          // (pattern)
     AST_SEQUENCE,       // pattern1 pattern2
     AST_QUANTIFIER,     // pattern*, pattern+, pattern?
+    AST_ALTERNATION,    // pattern1|pattern2
     AST_ANCHOR_START,   // ^
     AST_ANCHOR_END      // $
 } ASTNodeType;
@@ -39,6 +40,11 @@ typedef struct ASTNode {
             int min_count;          // For {n} and {n,m}
             int max_count;          // For {n,m}, -1 for unlimited
         } quantifier;
+        struct {                    // For AST_ALTERNATION
+            struct ASTNode **alternatives;
+            int alternative_count;
+            int capacity;
+        } alternation;
     } data;
 } ASTNode;
 

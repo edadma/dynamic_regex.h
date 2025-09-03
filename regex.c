@@ -4,6 +4,9 @@
 #include <ctype.h>
 #include <stdio.h>
 
+// Forward declaration for new lexer+parser
+static ASTNode* parse_pattern_with_lexer(const char *pattern, int *group_counter);
+
 // Use the same compilation logic as v2, just change the execution
 // I'll copy the key parts and focus on the VM execution
 
@@ -94,11 +97,15 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
         return regex;
     }
     
-    // Parse pattern to AST
+    // NEW: Use lexer + parser approach with proper precedence
+    // Parse pattern to AST using new lexer+parser with proper precedence
     int group_counter = 0;
-    ASTNode *ast = parse_pattern(pattern, &group_counter);
+    ASTNode *ast = parse_pattern_with_lexer(pattern, &group_counter);
+    if (!ast) {
+        return NULL; // Parse error
+    }
     
-    // Compile AST to bytecode
+    // Compile AST to bytecode (unchanged)
     CompiledRegex *compiled = compile_ast(ast, flags);
     
     // Clean up AST
@@ -646,6 +653,11 @@ ASTNode* create_ast_node(ASTNodeType type) {
             node->data.quantifier.min_count = 0;
             node->data.quantifier.max_count = 0;
             break;
+        case AST_ALTERNATION:
+            node->data.alternation.alternatives = NULL;
+            node->data.alternation.alternative_count = 0;
+            node->data.alternation.capacity = 0;
+            break;
         case AST_CHARSET:
             memset(node->data.charset.charset, 0, 32);
             node->data.charset.negate = 0;
@@ -674,6 +686,12 @@ void free_ast(ASTNode *node) {
         case AST_QUANTIFIER:
             free_ast(node->data.quantifier.target);
             break;
+        case AST_ALTERNATION:
+            for (int i = 0; i < node->data.alternation.alternative_count; i++) {
+                free_ast(node->data.alternation.alternatives[i]);
+            }
+            free(node->data.alternation.alternatives);
+            break;
         default:
             // Other types don't have child nodes to free
             break;
@@ -698,6 +716,16 @@ void add_sequence_child(ASTNode *sequence, ASTNode *child) {
 }
 
 // Parse a regex pattern into an AST
+// Helper function to add alternation child
+void add_alternation_child(ASTNode *alternation, ASTNode *child) {
+    if (alternation->data.alternation.alternative_count >= alternation->data.alternation.capacity) {
+        alternation->data.alternation.capacity = alternation->data.alternation.capacity ? alternation->data.alternation.capacity * 2 : 4;
+        alternation->data.alternation.alternatives = realloc(alternation->data.alternation.alternatives, 
+                                                               alternation->data.alternation.capacity * sizeof(ASTNode*));
+    }
+    alternation->data.alternation.alternatives[alternation->data.alternation.alternative_count++] = child;
+}
+
 ASTNode* parse_pattern(const char *pattern, int *group_counter) {
     int len = strlen(pattern);
     if (len == 0) {
@@ -705,6 +733,69 @@ ASTNode* parse_pattern(const char *pattern, int *group_counter) {
         return create_ast_node(AST_SEQUENCE);
     }
     
+    // First pass: check for top-level alternation (|)
+    // Count parentheses depth to avoid splitting inside groups
+    int paren_depth = 0;
+    int alternation_count = 1; // At least one alternative
+    
+    for (int i = 0; i < len; i++) {
+        char ch = pattern[i];
+        
+        if (ch == '\\' && i + 1 < len) {
+            i++; // Skip escaped character
+        } else if (ch == '(') {
+            paren_depth++;
+        } else if (ch == ')') {
+            paren_depth--;
+        } else if (ch == '|' && paren_depth == 0) {
+            alternation_count++;
+        }
+    }
+    
+    if (alternation_count > 1) {
+        // Pattern contains top-level alternation - split it
+        ASTNode *alternation = create_ast_node(AST_ALTERNATION);
+        
+        int start = 0;
+        paren_depth = 0;
+        
+        for (int i = 0; i <= len; i++) {
+            char ch = (i < len) ? pattern[i] : '\0';
+            
+            if (ch == '\\' && i + 1 < len) {
+                i++; // Skip escaped character
+            } else if (ch == '(') {
+                paren_depth++;
+            } else if (ch == ')') {
+                paren_depth--;
+            } else if ((ch == '|' && paren_depth == 0) || i == len) {
+                // Extract this alternative
+                int alt_len = i - start;
+                
+                if (alt_len > 0) {
+                    char *alt_pattern = malloc(alt_len + 1);
+                    strncpy(alt_pattern, pattern + start, alt_len);
+                    alt_pattern[alt_len] = '\0';
+                    
+                    // Parse this alternative recursively
+                    ASTNode *alternative = parse_pattern(alt_pattern, group_counter);
+                    add_alternation_child(alternation, alternative);
+                    
+                    free(alt_pattern);
+                } else {
+                    // Empty alternative - create an empty sequence
+                    ASTNode *empty_seq = create_ast_node(AST_SEQUENCE);
+                    add_alternation_child(alternation, empty_seq);
+                }
+                
+                start = i + 1;
+            }
+        }
+        
+        return alternation;
+    }
+    
+    // No top-level alternation - proceed with sequence parsing
     ASTNode *sequence = create_ast_node(AST_SEQUENCE);
     
     for (int i = 0; i < len; i++) {
@@ -1054,6 +1145,13 @@ int count_groups(ASTNode *node) {
             max_group = count_groups(node->data.quantifier.target);
             break;
             
+        case AST_ALTERNATION:
+            for (int i = 0; i < node->data.alternation.alternative_count; i++) {
+                int child_max = count_groups(node->data.alternation.alternatives[i]);
+                if (child_max > max_group) max_group = child_max;
+            }
+            break;
+            
         default:
             // Other node types don't contain groups
             break;
@@ -1224,6 +1322,38 @@ void compile_ast_node(ASTNode *node, CompiledRegex *regex) {
             emit_ast_instruction(regex, OP_ANCHOR_END);
             break;
         }
+        
+        case AST_ALTERNATION: {
+            // Alternation: CHOICE +skip1, [alt1], BRANCH +end, CHOICE +skip2, [alt2], BRANCH +end, ..., [lastalt]
+            int alternative_count = node->data.alternation.alternative_count;
+            int *branch_addrs = malloc(alternative_count * sizeof(int));
+            
+            // Compile all alternatives except the last
+            for (int i = 0; i < alternative_count - 1; i++) {
+                // Create choice point to skip to next alternative
+                int choice_pc = emit_ast_instruction(regex, OP_CHOICE);
+                
+                // Compile this alternative
+                compile_ast_node(node->data.alternation.alternatives[i], regex);
+                
+                // Branch to end of alternation
+                branch_addrs[i] = emit_ast_instruction(regex, OP_BRANCH);
+                
+                // Update CHOICE to skip to next alternative (right here)
+                regex->code[choice_pc].addr = regex->code_len - choice_pc;
+            }
+            
+            // Compile the last alternative (no CHOICE needed)
+            compile_ast_node(node->data.alternation.alternatives[alternative_count - 1], regex);
+            
+            // Update all BRANCH instructions to jump to here (end of alternation)
+            for (int i = 0; i < alternative_count - 1; i++) {
+                regex->code[branch_addrs[i]].addr = regex->code_len - branch_addrs[i];
+            }
+            
+            free(branch_addrs);
+            break;
+        }
     }
 }
 
@@ -1258,3 +1388,12 @@ CompiledRegex* compile_ast(ASTNode *ast, int flags) {
     
     return regex;
 }
+
+// ================================================================
+// NEW LEXER + PARSER WITH PROPER PRECEDENCE
+// ================================================================
+
+
+#include "lexer.c" // AMALGAMATE
+
+#include "parser.c" // AMALGAMATE
