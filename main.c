@@ -27,6 +27,12 @@
     regex_free(re); \
 } while(0)
 
+#define ASSERT_NO_MATCH_WITH_FLAGS(pattern, flags, text) do { \
+    RegExp *re = regex_new(pattern, flags); \
+    TEST_ASSERT_FALSE_MESSAGE(regex_test(re, text), "Pattern with flags should not match text"); \
+    regex_free(re); \
+} while(0)
+
 #define ASSERT_GROUP_MATCH(pattern, text, group_idx, expected) do { \
     RegExp *re = regex_new(pattern, ""); \
     MatchResult *result = regex_exec(re, text); \
@@ -378,6 +384,38 @@ void test_case_insensitive_flag(void) {
     ASSERT_MATCH_WITH_FLAGS("hello", "i", "Hello");
     ASSERT_MATCH_WITH_FLAGS("hello", "i", "HeLLo");
     ASSERT_MATCH_WITH_FLAGS("[a-z]+", "i", "HELLO");
+}
+
+void test_case_insensitive_character_classes(void) {
+    // Test basic character ranges with case-insensitive flag
+    ASSERT_MATCH_WITH_FLAGS("[A-Z]", "i", "a");  // [A-Z] should match lowercase
+    ASSERT_MATCH_WITH_FLAGS("[A-Z]", "i", "z");  // [A-Z] should match lowercase
+    ASSERT_MATCH_WITH_FLAGS("[a-z]", "i", "A");  // [a-z] should match uppercase
+    ASSERT_MATCH_WITH_FLAGS("[a-z]", "i", "Z");  // [a-z] should match uppercase
+    
+    // Test mixed ranges
+    ASSERT_MATCH_WITH_FLAGS("[A-C]", "i", "a");
+    ASSERT_MATCH_WITH_FLAGS("[A-C]", "i", "b"); 
+    ASSERT_MATCH_WITH_FLAGS("[A-C]", "i", "c");
+    ASSERT_MATCH_WITH_FLAGS("[x-z]", "i", "X");
+    ASSERT_MATCH_WITH_FLAGS("[x-z]", "i", "Y");
+    ASSERT_MATCH_WITH_FLAGS("[x-z]", "i", "Z");
+    
+    // Test that it still works normally without the flag
+    ASSERT_MATCH("[A-Z]", "A");
+    ASSERT_NO_MATCH("[A-Z]", "a");
+    ASSERT_MATCH("[a-z]", "a");
+    ASSERT_NO_MATCH("[a-z]", "A");
+    
+    // Test complex character classes with case-insensitive flag
+    ASSERT_MATCH_WITH_FLAGS("[A-Z0-9]", "i", "a");
+    ASSERT_MATCH_WITH_FLAGS("[A-Z0-9]", "i", "5");
+    ASSERT_MATCH_WITH_FLAGS("[a-z0-9]", "i", "A");
+    ASSERT_MATCH_WITH_FLAGS("[a-z0-9]", "i", "5");
+    
+    // Test negated character classes with case-insensitive flag
+    ASSERT_NO_MATCH_WITH_FLAGS("[^A-Z]", "i", "a");  // [^A-Z] should NOT match lowercase with i flag
+    ASSERT_NO_MATCH_WITH_FLAGS("[^a-z]", "i", "A");  // [^a-z] should NOT match uppercase with i flag
 }
 
 // Global flag tests
@@ -886,6 +924,7 @@ int main(void) {
 
     // Flags
     RUN_TEST(test_case_insensitive_flag);
+    RUN_TEST(test_case_insensitive_character_classes);
     RUN_TEST(test_global_flag_with_exec);
 
     // Language API compatibility
