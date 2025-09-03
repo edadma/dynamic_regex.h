@@ -663,9 +663,17 @@ MatchResult* string_match(const char *text, RegExp *regexp) {
 MatchIterator* string_match_all(const char *text, RegExp *regexp) {
     if (!text || !regexp) return NULL;
     
+    // matchAll requires global flag
+    if (!(regexp->compiled->flags & 4)) { // Check for global flag 'g'
+        return NULL;
+    }
+    
+    // Reset lastIndex to start from beginning
+    regexp->last_index = 0;
+    
     MatchIterator *iter = malloc(sizeof(MatchIterator));
     iter->regexp = regexp;
-    iter->text = text;
+    iter->text = strdup(text);  // Keep our own copy
     iter->pos = 0;
     iter->done = 0;
     
@@ -675,16 +683,19 @@ MatchIterator* string_match_all(const char *text, RegExp *regexp) {
 MatchResult* match_iterator_next(MatchIterator *iter) {
     if (!iter || iter->done) return NULL;
     
-    // For now, just return one match and mark done
-    // This is a simplified implementation
+    // Use regex_exec which handles global flag and lastIndex
     MatchResult *result = regex_exec(iter->regexp, iter->text);
-    iter->done = 1;  // Mark as done after first match
+    
+    if (!result) {
+        iter->done = 1;  // No more matches
+    }
     
     return result;
 }
 
 void match_iterator_free(MatchIterator *iter) {
     if (iter) {
+        free((char*)iter->text);  // Free our copy of text
         free(iter);
     }
 }

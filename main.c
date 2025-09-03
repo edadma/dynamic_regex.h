@@ -635,11 +635,11 @@ int main(void) {
     RUN_TEST(test_case_insensitive_flag);
     RUN_TEST(test_global_flag_with_exec);
 
-    // // JavaScript API compatibility
-    // RUN_TEST(test_match_iterator);
-    // RUN_TEST(test_match_iterator_requires_global);
-    // RUN_TEST(test_string_match_method);
-    //
+    // Language API compatibility
+    RUN_TEST(test_match_iterator);
+    RUN_TEST(test_match_iterator_requires_global);
+    RUN_TEST(test_string_match_method);
+
     // // Complex patterns
     // RUN_TEST(test_email_pattern);
     // RUN_TEST(test_phone_pattern);
