@@ -134,6 +134,21 @@ void test_character_classes(void) {
     ASSERT_MATCH("[.-/]", ".txt");
     ASSERT_MATCH("[.-/]", "/path");
     ASSERT_NO_MATCH("[.-/]", "abc");
+    
+    // Escape sequences within character classes
+    ASSERT_MATCH("[\\d\\w]", "5");      // Digit or word char
+    ASSERT_MATCH("[\\d\\w]", "a");      // Digit or word char
+    ASSERT_MATCH("[\\d\\w]", "_");      // Underscore is word char
+    ASSERT_NO_MATCH("[\\d\\w]", "@");   // Special char not word/digit
+    
+    ASSERT_MATCH("[a-z\\s]", "hello");  // Letter or space
+    ASSERT_MATCH("[a-z\\s]", " ");      // Space matches \\s
+    ASSERT_MATCH("[a-z\\s]", "\t");     // Tab matches \\s
+    ASSERT_NO_MATCH("[a-z\\s]", "A");   // Uppercase not in range
+    
+    ASSERT_MATCH("[\\n\\t\\r]", "\n");  // Literal escapes in class
+    ASSERT_MATCH("[\\n\\t\\r]", "\t");  // Tab literal
+    ASSERT_NO_MATCH("[\\n\\t\\r]", "a"); // Regular char doesn't match
 }
 
 void test_negated_character_classes(void) {
@@ -155,6 +170,15 @@ void test_negated_character_classes(void) {
     ASSERT_NO_MATCH("[^aeiou0-9]", "5");
     ASSERT_MATCH("[^aeiou0-9]", "x");
     ASSERT_MATCH("[^aeiou0-9]", "z");
+    
+    // Negated with escape sequences
+    ASSERT_NO_MATCH("[^\\d\\w]", "5");     // Digit matches, negated doesn't
+    ASSERT_NO_MATCH("[^\\d\\w]", "a");     // Word char matches, negated doesn't
+    ASSERT_MATCH("[^\\d\\w]", "@");        // Special char doesn't match, negated does
+    
+    ASSERT_NO_MATCH("[^\\s]", " ");        // Space matches \\s, negated doesn't
+    ASSERT_NO_MATCH("[^\\s]", "\t");       // Tab matches \\s, negated doesn't
+    ASSERT_MATCH("[^\\s]", "a");           // Letter doesn't match \\s, negated does
 }
 
 // Escape sequence tests
@@ -510,12 +534,12 @@ int main(void) {
     RUN_TEST(test_character_classes);
     RUN_TEST(test_negated_character_classes);
 
-    // // Escape sequences
-    // RUN_TEST(test_digit_escape);
-    // RUN_TEST(test_word_escape);
-    // RUN_TEST(test_space_escape);
-    // RUN_TEST(test_literal_escapes);
-    //
+    // Escape sequences
+    RUN_TEST(test_digit_escape);
+    RUN_TEST(test_word_escape);
+    RUN_TEST(test_space_escape);
+    RUN_TEST(test_literal_escapes);
+
     // // Quantifiers
     // RUN_TEST(test_star_quantifier);
     // RUN_TEST(test_plus_quantifier);

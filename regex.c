@@ -106,6 +106,112 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             continue;
         }
         
+        // Handle escape sequences
+        if (ch == '\\' && i + 1 < pattern_len) {
+            char escape_char = pattern[i + 1];
+            
+            // Handle character class escapes
+            if (escape_char == 'd' || escape_char == 'D' ||
+                escape_char == 'w' || escape_char == 'W' ||
+                escape_char == 's' || escape_char == 'S') {
+                
+                regex->code[pc].op = OP_CHARSET;
+                memset(regex->code[pc].charset, 0, sizeof(regex->code[pc].charset));
+                
+                if (escape_char == 'd') {
+                    // \d matches [0-9]
+                    regex->code[pc].negate = 0;
+                    for (char c = '0'; c <= '9'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                } else if (escape_char == 'D') {
+                    // \D matches [^0-9]
+                    regex->code[pc].negate = 1;
+                    for (char c = '0'; c <= '9'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                } else if (escape_char == 'w') {
+                    // \w matches [a-zA-Z0-9_]
+                    regex->code[pc].negate = 0;
+                    for (char c = 'a'; c <= 'z'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    for (char c = 'A'; c <= 'Z'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    for (char c = '0'; c <= '9'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    int bit = (unsigned char)'_';
+                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                } else if (escape_char == 'W') {
+                    // \W matches [^a-zA-Z0-9_]
+                    regex->code[pc].negate = 1;
+                    for (char c = 'a'; c <= 'z'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    for (char c = 'A'; c <= 'Z'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    for (char c = '0'; c <= '9'; c++) {
+                        int bit = (unsigned char)c;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    int bit = (unsigned char)'_';
+                    regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                } else if (escape_char == 's') {
+                    // \s matches [ \t\n\r\f\v]
+                    regex->code[pc].negate = 0;
+                    int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
+                    for (int j = 0; j < 6; j++) {
+                        int bit = (unsigned char)space_chars[j];
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                } else if (escape_char == 'S') {
+                    // \S matches [^ \t\n\r\f\v]
+                    regex->code[pc].negate = 1;
+                    int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
+                    for (int j = 0; j < 6; j++) {
+                        int bit = (unsigned char)space_chars[j];
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                }
+                
+                pc++;
+                i += 2; // Skip both \ and the escape character
+                continue;
+            }
+            
+            // Handle literal escapes
+            if (escape_char == 'n' || escape_char == 't' || escape_char == 'r') {
+                regex->code[pc].op = OP_CHAR;
+                if (escape_char == 'n') {
+                    regex->code[pc].c = '\n';
+                } else if (escape_char == 't') {
+                    regex->code[pc].c = '\t';
+                } else if (escape_char == 'r') {
+                    regex->code[pc].c = '\r';
+                }
+                pc++;
+                i += 2; // Skip both \ and the escape character
+                continue;
+            }
+            
+            // For other escapes, treat as literal (e.g., \. becomes .)
+            regex->code[pc].op = OP_CHAR;
+            regex->code[pc].c = escape_char;
+            pc++;
+            i += 2; // Skip both \ and the escaped character
+            continue;
+        }
+        
         // Handle character classes [...]
         if (ch == '[') {
             // Parse character class
@@ -141,7 +247,56 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             
             // Parse the character class content
             for (int j = class_start; j < class_end; j++) {
-                if (j + 2 < class_end && pattern[j + 1] == '-') {
+                // Handle escape sequences within character classes
+                if (pattern[j] == '\\' && j + 1 < class_end) {
+                    char escape_char = pattern[j + 1];
+                    
+                    if (escape_char == 'd') {
+                        // \d matches [0-9]
+                        for (char c = '0'; c <= '9'; c++) {
+                            int bit = (unsigned char)c;
+                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                    } else if (escape_char == 'w') {
+                        // \w matches [a-zA-Z0-9_]
+                        for (char c = 'a'; c <= 'z'; c++) {
+                            int bit = (unsigned char)c;
+                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                        for (char c = 'A'; c <= 'Z'; c++) {
+                            int bit = (unsigned char)c;
+                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                        for (char c = '0'; c <= '9'; c++) {
+                            int bit = (unsigned char)c;
+                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                        int bit = (unsigned char)'_';
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    } else if (escape_char == 's') {
+                        // \s matches [ \t\n\r\f\v]
+                        int space_chars[] = {' ', '\t', '\n', '\r', '\f', '\v'};
+                        for (int k = 0; k < 6; k++) {
+                            int bit = (unsigned char)space_chars[k];
+                            regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                        }
+                    } else if (escape_char == 'n') {
+                        int bit = (unsigned char)'\n';
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    } else if (escape_char == 't') {
+                        int bit = (unsigned char)'\t';
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    } else if (escape_char == 'r') {
+                        int bit = (unsigned char)'\r';
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    } else {
+                        // Treat as literal escaped character
+                        int bit = (unsigned char)escape_char;
+                        regex->code[pc].charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    
+                    j++; // Skip the escape character
+                } else if (j + 2 < class_end && pattern[j + 1] == '-') {
                     // Character range: a-z (but make sure j+2 is not the last char)
                     char start_char = pattern[j];
                     char end_char = pattern[j + 2];
@@ -163,7 +318,7 @@ CompiledRegex* compile_regex(const char *pattern, int flags) {
             continue;
         }
         
-        // Check for quantifiers - but character classes are already handled above
+        // Check for quantifiers - but character classes and escapes are already handled above
         if (i + 1 < pattern_len && pattern[i + 1] == '*') {
             // Zero-or-more quantifier: X*
             int choice_addr = pc;
