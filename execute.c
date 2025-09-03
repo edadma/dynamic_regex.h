@@ -189,6 +189,37 @@ static int execute(CompiledRegex *compiled, VM *vm) {
                 }
                 break;
 
+            case OP_WORD_BOUNDARY: {
+                // Word boundary: match if one side is word char, other is not
+                int is_word_boundary = 0;
+                
+                // Check character at current position (right side)
+                int right_is_word = 0;
+                if (vm->pos < vm->text_len) {
+                    char c = vm->text[vm->pos];
+                    right_is_word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (c == '_');
+                }
+                
+                // Check character before current position (left side)
+                int left_is_word = 0;
+                if (vm->pos > 0) {
+                    char c = vm->text[vm->pos - 1];
+                    left_is_word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (c == '_');
+                }
+                
+                // Word boundary exists when exactly one side is a word character
+                is_word_boundary = (left_is_word && !right_is_word) || (!left_is_word && right_is_word);
+                
+                if (is_word_boundary) {
+                    vm->pc++;
+                    vm->last_operation_success = 1;
+                } else {
+                    vm->last_operation_success = 0;
+                    if (!pop_choice(vm)) return 0;
+                }
+                break;
+            }
+
             case OP_MATCH:
                 return 1;
 

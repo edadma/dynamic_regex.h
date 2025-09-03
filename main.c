@@ -457,6 +457,257 @@ void test_string_match_method(void) {
     regex_free(re);
 }
 
+// Comprehensive match iterator test with non-trivial patterns
+void test_comprehensive_match_iterator(void) {
+    // Test 1: Email addresses in a sentence
+    {
+        RegExp *re = regex_new("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", "g");
+        const char *text = "Contact us at support@example.com, sales@company.org, or admin@test.co.uk for assistance.";
+        const char *expected_emails[] = {"support@example.com", "sales@company.org", "admin@test.co.uk"};
+        int expected_positions[] = {14, 35, 57}; // Start positions in the text
+        int expected_count = 3;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_emails[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+    
+    // Test 2: Phone numbers in various formats
+    {
+        RegExp *re = regex_new("\\d{3}[- ]?\\d{3}[- ]?\\d{4}", "g");
+        const char *text = "Call 555-123-4567 or 800 555 1234, alternatively try 9876543210.";
+        const char *expected_phones[] = {"555-123-4567", "800 555 1234", "9876543210"};
+        int expected_positions[] = {5, 21, 53}; // Start positions in the text
+        int expected_count = 3;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_phones[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+    
+    // Test 3: URLs with different protocols
+    {
+        RegExp *re = regex_new("https?://[\\w.\\-]+\\.[a-zA-Z]{2,}(/[\\w./?#&=\\-]*)?", "g");
+        const char *text = "Visit https://www.example.com or http://test-site.org/page?id=123 for more info.";
+        const char *expected_urls[] = {"https://www.example.com", "http://test-site.org/page?id=123"};
+        int expected_positions[] = {6, 33}; // Start positions in the text
+        int expected_count = 2;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_urls[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+    
+    // Test 4: IP addresses
+    {
+        RegExp *re = regex_new("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}", "g");
+        const char *text = "Server IPs: 192.168.1.1, 10.0.0.1, and 255.255.255.0 are configured.";
+        const char *expected_ips[] = {"192.168.1.1", "10.0.0.1", "255.255.255.0"};
+        int expected_positions[] = {12, 25, 39}; // Start positions in the text
+        int expected_count = 3;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_ips[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+    
+    // Test 5: Hexadecimal color codes
+    {
+        RegExp *re = regex_new("#[0-9a-fA-F]{6}", "g");
+        const char *text = "Colors: #FF0000 (red), #00FF00 (green), #0000FF (blue), #FFFFFF (white).";
+        const char *expected_colors[] = {"#FF0000", "#00FF00", "#0000FF", "#FFFFFF"};
+        int expected_positions[] = {8, 23, 40, 56}; // Start positions in the text
+        int expected_count = 4;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_colors[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+}
+
+// Comprehensive word boundary tests
+void test_word_boundary_patterns(void) {
+    // Test 1: Basic word boundary matching
+    {
+        ASSERT_MATCH("\\bword\\b", "word");
+        ASSERT_MATCH("\\bword\\b", "a word here");
+        ASSERT_MATCH("\\bword\\b", "word!");
+        ASSERT_MATCH("\\bword\\b", "!word");
+        ASSERT_NO_MATCH("\\bword\\b", "sword");
+        ASSERT_NO_MATCH("\\bword\\b", "words");
+        ASSERT_NO_MATCH("\\bword\\b", "password");
+    }
+    
+    // Test 2: Numbers with word boundaries
+    {
+        ASSERT_MATCH("\\b123\\b", "123");
+        ASSERT_MATCH("\\b123\\b", "number 123 here");
+        ASSERT_MATCH("\\b123\\b", "123!");
+        ASSERT_NO_MATCH("\\b123\\b", "a123");
+        ASSERT_NO_MATCH("\\b123\\b", "123a");
+        ASSERT_NO_MATCH("\\b123\\b", "1234");
+    }
+    
+    // Test 3: Word boundary at start of string
+    {
+        ASSERT_MATCH("\\btest", "test");
+        ASSERT_MATCH("\\btest", "test case");
+        ASSERT_NO_MATCH("\\btest", "pretest");
+        ASSERT_NO_MATCH("\\btest", "contest");
+    }
+    
+    // Test 4: Word boundary at end of string
+    {
+        ASSERT_MATCH("test\\b", "test");
+        ASSERT_MATCH("test\\b", "a test");
+        ASSERT_NO_MATCH("test\\b", "testing");
+        ASSERT_NO_MATCH("test\\b", "testcase");
+    }
+    
+    // Test 5: Multiple word boundaries
+    {
+        ASSERT_MATCH("\\bcat\\b.*\\bdog\\b", "cat and dog");
+        ASSERT_MATCH("\\bcat\\b.*\\bdog\\b", "the cat sees the dog");
+        ASSERT_NO_MATCH("\\bcat\\b.*\\bdog\\b", "catdog");
+        ASSERT_NO_MATCH("\\bcat\\b.*\\bdog\\b", "cat and dogs");
+    }
+    
+    // Test 6: Word boundaries with punctuation
+    {
+        ASSERT_MATCH("\\bhi\\b", "hi!");
+        ASSERT_MATCH("\\bhi\\b", "hi.");
+        ASSERT_MATCH("\\bhi\\b", "hi,");
+        ASSERT_MATCH("\\bhi\\b", "(hi)");
+        ASSERT_MATCH("\\bhi\\b", "[hi]");
+        ASSERT_MATCH("\\bhi\\b", "hi?");
+    }
+    
+    // Test 7: Word boundaries with underscores (underscores are word chars)
+    {
+        ASSERT_NO_MATCH("\\btest\\b", "test_case");
+        ASSERT_NO_MATCH("\\btest\\b", "_test");
+        ASSERT_MATCH("\\b_test\\b", " _test ");
+        ASSERT_MATCH("\\bvar_name\\b", "var_name = 5");
+    }
+    
+    // Test 8: Hex colors with word boundaries (now should work!)
+    {
+        RegExp *re = regex_new("#[0-9a-fA-F]{6}\\b", "g");
+        const char *text = "Colors: #FF0000 (red), #00FF00 (green), #0000FF (blue), #FFFFFF (white).";
+        const char *expected_colors[] = {"#FF0000", "#00FF00", "#0000FF", "#FFFFFF"};
+        int expected_positions[] = {8, 23, 40, 56}; // Start positions in the text
+        int expected_count = 4;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_colors[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+    
+    // Test 9: Extract whole words only
+    {
+        RegExp *re = regex_new("\\b\\w+\\b", "g");
+        const char *text = "Hello, world! Test-case with_underscore and spaces.";
+        const char *expected_words[] = {"Hello", "world", "Test", "case", "with_underscore", "and", "spaces"};
+        int expected_positions[] = {0, 7, 14, 19, 24, 40, 44}; // Start positions in the text
+        int expected_count = 7;
+        
+        MatchIterator *iter = string_match_all(text, re);
+        TEST_ASSERT_NOT_NULL(iter);
+        
+        MatchResult *result;
+        int count = 0;
+        while ((result = match_iterator_next(iter)) != NULL) {
+            TEST_ASSERT_LESS_THAN(expected_count, count);
+            TEST_ASSERT_EQUAL_STRING(expected_words[count], result->groups[0]);
+            TEST_ASSERT_EQUAL_INT(expected_positions[count], result->index);
+            match_result_free(result);
+            count++;
+        }
+        
+        TEST_ASSERT_EQUAL_INT(expected_count, count);
+        match_iterator_free(iter);
+        regex_free(re);
+    }
+}
+
 // Complex pattern tests
 void test_email_pattern(void) {
     // Note: dash must be escaped or at the beginning/end of character class
@@ -640,7 +891,11 @@ int main(void) {
     // Language API compatibility
     RUN_TEST(test_match_iterator);
     RUN_TEST(test_match_iterator_requires_global);
+    RUN_TEST(test_comprehensive_match_iterator);
     RUN_TEST(test_string_match_method);
+
+    // Word boundary tests
+    RUN_TEST(test_word_boundary_patterns);
 
     // Complex patterns
     RUN_TEST(test_email_pattern);

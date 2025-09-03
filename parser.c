@@ -234,6 +234,13 @@ ASTNode* parse_atom(Parser *parser) {
             return create_ast_node(AST_ANCHOR_END);
         }
         
+        case TOK_WORD_BOUNDARY: {
+            lexer_next(parser->lexer);
+            parser->current_token = lexer_peek(parser->lexer);
+            
+            return create_ast_node(AST_WORD_BOUNDARY);
+        }
+        
         case TOK_LPAREN: {
             // Parse group: '(' alternation ')'
             lexer_next(parser->lexer); // consume '('

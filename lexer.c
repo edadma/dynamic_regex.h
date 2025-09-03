@@ -7,7 +7,7 @@
 typedef enum {
     TOK_EOF, TOK_CHAR, TOK_DOT, TOK_STAR, TOK_PLUS, TOK_QUESTION, TOK_PIPE,
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACKET, TOK_RBRACKET, TOK_LBRACE, TOK_RBRACE,
-    TOK_CARET, TOK_DOLLAR, TOK_CHARSET, TOK_QUANTIFIER, TOK_ERROR
+    TOK_CARET, TOK_DOLLAR, TOK_CHARSET, TOK_QUANTIFIER, TOK_WORD_BOUNDARY, TOK_ERROR
 } TokenType;
 
 // Token structure
@@ -336,6 +336,10 @@ static Token* lexer_read_escape_sequence(Lexer *lexer) {
                     }
                     break;
             }
+            break;
+            
+        case 'b': // \b -> word boundary
+            token->type = TOK_WORD_BOUNDARY;
             break;
             
         case 'n': // \n -> newline character

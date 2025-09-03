@@ -205,6 +205,11 @@ void compile_ast_node(ASTNode *node, CompiledRegex *regex) {
             break;
         }
         
+        case AST_WORD_BOUNDARY: {
+            emit_ast_instruction(regex, OP_WORD_BOUNDARY);
+            break;
+        }
+        
         case AST_ALTERNATION: {
             // Alternation: CHOICE +skip1, [alt1], BRANCH +end, CHOICE +skip2, [alt2], BRANCH +end, ..., [lastalt]
             int alternative_count = node->data.alternation.alternative_count;
