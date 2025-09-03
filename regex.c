@@ -652,6 +652,9 @@ void debug_display_ast(ASTNode *node, int depth) {
         case AST_WORD_BOUNDARY:
             printf("WORD_BOUNDARY\n");
             break;
+        case AST_WORD_BOUNDARY_NEG:
+            printf("WORD_BOUNDARY_NEG\n");
+            break;
         default:
             printf("UNKNOWN(%d)\n", node->type);
     }
@@ -714,6 +717,9 @@ void debug_display_token_stream(const char *pattern) {
                 break;
             case TOK_WORD_BOUNDARY:
                 printf("WORD_BOUNDARY");
+                break;
+            case TOK_WORD_BOUNDARY_NEG:
+                printf("WORD_BOUNDARY_NEG");
                 break;
             case TOK_PIPE:
                 printf("PIPE");

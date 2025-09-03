@@ -7,7 +7,7 @@
 typedef enum {
     TOK_EOF, TOK_CHAR, TOK_DOT, TOK_STAR, TOK_PLUS, TOK_QUESTION, TOK_PIPE,
     TOK_LPAREN, TOK_RPAREN, TOK_LBRACKET, TOK_RBRACKET, TOK_LBRACE, TOK_RBRACE,
-    TOK_CARET, TOK_DOLLAR, TOK_CHARSET, TOK_QUANTIFIER, TOK_WORD_BOUNDARY, TOK_ERROR
+    TOK_CARET, TOK_DOLLAR, TOK_CHARSET, TOK_QUANTIFIER, TOK_WORD_BOUNDARY, TOK_WORD_BOUNDARY_NEG, TOK_ERROR
 } TokenType;
 
 // Token structure
@@ -155,6 +155,53 @@ static Token* lexer_read_charset(Lexer *lexer) {
                 case 'r': // \r -> carriage return
                     {
                         int bit = (unsigned char)'\r';
+                        token->data.charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    break;
+                case 'f': // \f -> form feed
+                    {
+                        int bit = (unsigned char)'\f';
+                        token->data.charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    break;
+                case 'v': // \v -> vertical tab
+                    {
+                        int bit = (unsigned char)'\v';
+                        token->data.charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    break;
+                case '0': // \0 -> null character
+                    {
+                        int bit = (unsigned char)'\0';
+                        token->data.charset[bit / 8] |= (1 << (bit % 8));
+                    }
+                    break;
+                case 'x': // \x41 -> hex character in character class
+                    if (lexer->pos + 2 < lexer->len) {
+                        char hex1 = lexer->input[lexer->pos + 1];
+                        char hex2 = lexer->input[lexer->pos + 2];
+                        
+                        // Convert hex digits to values
+                        int val1 = -1, val2 = -1;
+                        if (hex1 >= '0' && hex1 <= '9') val1 = hex1 - '0';
+                        else if (hex1 >= 'A' && hex1 <= 'F') val1 = hex1 - 'A' + 10;
+                        else if (hex1 >= 'a' && hex1 <= 'f') val1 = hex1 - 'a' + 10;
+                        
+                        if (hex2 >= '0' && hex2 <= '9') val2 = hex2 - '0';
+                        else if (hex2 >= 'A' && hex2 <= 'F') val2 = hex2 - 'A' + 10;
+                        else if (hex2 >= 'a' && hex2 <= 'f') val2 = hex2 - 'a' + 10;
+                        
+                        if (val1 >= 0 && val2 >= 0) {
+                            char hex_char = (char)(val1 * 16 + val2);
+                            int bit = (unsigned char)hex_char;
+                            token->data.charset[bit / 8] |= (1 << (bit % 8));
+                            lexer->pos += 2; // Skip the two hex digits
+                            break;
+                        }
+                    }
+                    // If not valid hex, treat as literal 'x'
+                    {
+                        int bit = (unsigned char)'x';
                         token->data.charset[bit / 8] |= (1 << (bit % 8));
                     }
                     break;
@@ -342,6 +389,10 @@ static Token* lexer_read_escape_sequence(Lexer *lexer) {
             token->type = TOK_WORD_BOUNDARY;
             break;
             
+        case 'B': // \B -> negative word boundary
+            token->type = TOK_WORD_BOUNDARY_NEG;
+            break;
+            
         case 'n': // \n -> newline character
             token->type = TOK_CHAR;
             token->data.character = '\n';
@@ -353,6 +404,44 @@ static Token* lexer_read_escape_sequence(Lexer *lexer) {
         case 'r': // \r -> carriage return
             token->type = TOK_CHAR;
             token->data.character = '\r';
+            break;
+        case 'f': // \f -> form feed
+            token->type = TOK_CHAR;
+            token->data.character = '\f';
+            break;
+        case 'v': // \v -> vertical tab
+            token->type = TOK_CHAR;
+            token->data.character = '\v';
+            break;
+        case '0': // \0 -> null character
+            token->type = TOK_CHAR;
+            token->data.character = '\0';
+            break;
+        case 'x': // \x41 -> hex character (two hex digits)
+            if (lexer->pos + 1 < lexer->len) {
+                char hex1 = lexer->input[lexer->pos];
+                char hex2 = lexer->input[lexer->pos + 1];
+                
+                // Convert hex digits to values
+                int val1 = -1, val2 = -1;
+                if (hex1 >= '0' && hex1 <= '9') val1 = hex1 - '0';
+                else if (hex1 >= 'A' && hex1 <= 'F') val1 = hex1 - 'A' + 10;
+                else if (hex1 >= 'a' && hex1 <= 'f') val1 = hex1 - 'a' + 10;
+                
+                if (hex2 >= '0' && hex2 <= '9') val2 = hex2 - '0';
+                else if (hex2 >= 'A' && hex2 <= 'F') val2 = hex2 - 'A' + 10;
+                else if (hex2 >= 'a' && hex2 <= 'f') val2 = hex2 - 'a' + 10;
+                
+                if (val1 >= 0 && val2 >= 0) {
+                    token->type = TOK_CHAR;
+                    token->data.character = (char)(val1 * 16 + val2);
+                    lexer->pos += 2; // Skip the two hex digits
+                    break;
+                }
+            }
+            // If not valid hex, treat as literal 'x'
+            token->type = TOK_CHAR;
+            token->data.character = 'x';
             break;
         default:
             // Regular escaped character

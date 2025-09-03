@@ -13,9 +13,10 @@ typedef enum {
     AST_SEQUENCE,       // pattern1 pattern2
     AST_QUANTIFIER,     // pattern*, pattern+, pattern?
     AST_ALTERNATION,    // pattern1|pattern2
-    AST_ANCHOR_START,   // ^
-    AST_ANCHOR_END,     // $
-    AST_WORD_BOUNDARY   // \b
+    AST_ANCHOR_START,       // ^
+    AST_ANCHOR_END,         // $
+    AST_WORD_BOUNDARY,      // \b
+    AST_WORD_BOUNDARY_NEG   // \B
 } ASTNodeType;
 
 typedef struct ASTNode {
@@ -64,6 +65,7 @@ typedef enum {
     OP_ANCHOR_START,      // Match start of string/line
     OP_ANCHOR_END,        // Match end of string/line
     OP_WORD_BOUNDARY,     // Match word boundary (\b)
+    OP_WORD_BOUNDARY_NEG, // Match negative word boundary (\B)
     OP_MATCH,             // Success
     OP_FAIL               // Explicit failure
 } OpCode;
